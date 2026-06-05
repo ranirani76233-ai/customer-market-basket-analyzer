@@ -8,3 +8,5 @@ scikit-learn
 mlxtend
 joblib
 openpyxl
+networkx
+scipy
