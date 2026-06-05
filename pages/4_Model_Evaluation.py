@@ -1,25 +1,24 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import joblib
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
-    mean_squared_error,
-    mean_absolute_error,
-    r2_score
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+    classification_report,
+    roc_curve,
+    auc
 )
 
-from sklearn.linear_model import LinearRegression
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.ensemble import (
-    RandomForestRegressor,
-    GradientBoostingRegressor,
-    ExtraTreesRegressor
-)
-
-# -------------------------------------------------
+# --------------------------------------------------
 # PAGE CONFIG
-# -------------------------------------------------
+# --------------------------------------------------
 
 st.set_page_config(
     page_title="Model Evaluation",
@@ -27,18 +26,18 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📈 Machine Learning Model Evaluation")
+st.title("📈 Model Evaluation Dashboard")
 
 st.markdown(
-    "Compare multiple machine learning models and select the best performer."
+    "Evaluate machine learning model performance."
 )
 
-# -------------------------------------------------
+# --------------------------------------------------
 # LOAD DATA
-# -------------------------------------------------
+# --------------------------------------------------
 
 uploaded_file = st.file_uploader(
-    "Upload CSV Dataset",
+    "Upload Evaluation Dataset",
     type=["csv"]
 )
 
@@ -49,28 +48,44 @@ if uploaded_file is not None:
     st.subheader("Dataset Preview")
     st.dataframe(df.head())
 
-    # ---------------------------------------------
-    # TARGET COLUMN
-    # ---------------------------------------------
-
     target = st.selectbox(
         "Select Target Column",
         df.columns
     )
 
-    X = df.drop(columns=[target])
+    try:
 
-    # Encode categorical columns
+        model = joblib.load(
+            "models/best_model.pkl"
+        )
+
+        st.success(
+            "Model Loaded Successfully"
+        )
+
+    except Exception as e:
+
+        st.error(
+            "Could not load model.\n"
+            "Make sure models/best_model.pkl exists."
+        )
+
+        st.stop()
+
+    # --------------------------------------------------
+    # PREPARE DATA
+    # --------------------------------------------------
+
+    X = df.drop(
+        columns=[target]
+    )
+
     X = pd.get_dummies(
         X,
         drop_first=True
     )
 
     y = df[target]
-
-    # ---------------------------------------------
-    # TRAIN TEST SPLIT
-    # ---------------------------------------------
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
@@ -79,150 +94,211 @@ if uploaded_file is not None:
         random_state=42
     )
 
-    # ---------------------------------------------
-    # MODELS
-    # ---------------------------------------------
+    # --------------------------------------------------
+    # PREDICTIONS
+    # --------------------------------------------------
 
-    models = {
+    predictions = model.predict(X_test)
 
-        "Linear Regression":
-        LinearRegression(),
+    # --------------------------------------------------
+    # METRICS
+    # --------------------------------------------------
 
-        "KNN":
-        KNeighborsRegressor(),
+    accuracy = accuracy_score(
+        y_test,
+        predictions
+    )
 
-        "Random Forest":
-        RandomForestRegressor(
-            random_state=42
-        ),
+    precision = precision_score(
+        y_test,
+        predictions,
+        average="weighted",
+        zero_division=0
+    )
 
-        "Gradient Boosting":
-        GradientBoostingRegressor(
-            random_state=42
-        ),
+    recall = recall_score(
+        y_test,
+        predictions,
+        average="weighted",
+        zero_division=0
+    )
 
-        "Extra Trees":
-        ExtraTreesRegressor(
-            random_state=42
-        )
-    }
+    f1 = f1_score(
+        y_test,
+        predictions,
+        average="weighted",
+        zero_division=0
+    )
 
-    if st.button("🚀 Evaluate Models"):
+    st.subheader("📊 Performance Metrics")
 
-        results = []
+    col1, col2, col3, col4 = st.columns(4)
 
-        progress = st.progress(0)
+    col1.metric(
+        "Accuracy",
+        f"{accuracy:.3f}"
+    )
 
-        for i, (name, model) in enumerate(models.items()):
+    col2.metric(
+        "Precision",
+        f"{precision:.3f}"
+    )
 
-            model.fit(
-                X_train,
-                y_train
+    col3.metric(
+        "Recall",
+        f"{recall:.3f}"
+    )
+
+    col4.metric(
+        "F1 Score",
+        f"{f1:.3f}"
+    )
+
+    # --------------------------------------------------
+    # CONFUSION MATRIX
+    # --------------------------------------------------
+
+    st.subheader("🔥 Confusion Matrix")
+
+    cm = confusion_matrix(
+        y_test,
+        predictions
+    )
+
+    fig, ax = plt.subplots()
+
+    im = ax.imshow(cm)
+
+    plt.colorbar(im)
+
+    ax.set_xlabel("Predicted")
+
+    ax.set_ylabel("Actual")
+
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(
+                j,
+                i,
+                str(cm[i, j]),
+                ha="center",
+                va="center"
             )
 
-            predictions = model.predict(
+    st.pyplot(fig)
+
+    # --------------------------------------------------
+    # CLASSIFICATION REPORT
+    # --------------------------------------------------
+
+    st.subheader("📋 Classification Report")
+
+    report = classification_report(
+        y_test,
+        predictions,
+        output_dict=True
+    )
+
+    st.dataframe(
+        pd.DataFrame(report).transpose()
+    )
+
+    # --------------------------------------------------
+    # ROC CURVE
+    # --------------------------------------------------
+
+    if hasattr(model, "predict_proba"):
+
+        st.subheader("📈 ROC Curve")
+
+        try:
+
+            y_prob = model.predict_proba(
                 X_test
-            )
+            )[:, 1]
 
-            mse = mean_squared_error(
+            fpr, tpr, _ = roc_curve(
                 y_test,
-                predictions
+                y_prob
             )
 
-            rmse = np.sqrt(mse)
-
-            mae = mean_absolute_error(
-                y_test,
-                predictions
+            roc_auc = auc(
+                fpr,
+                tpr
             )
 
-            r2 = r2_score(
-                y_test,
-                predictions
+            fig2, ax2 = plt.subplots()
+
+            ax2.plot(
+                fpr,
+                tpr,
+                label=f"AUC = {roc_auc:.3f}"
             )
 
-            results.append({
-
-                "Model": name,
-
-                "MSE": round(mse, 3),
-
-                "RMSE": round(rmse, 3),
-
-                "MAE": round(mae, 3),
-
-                "R² Score": round(r2, 3)
-            })
-
-            progress.progress(
-                (i + 1) / len(models)
+            ax2.plot(
+                [0, 1],
+                [0, 1],
+                linestyle="--"
             )
 
-        results_df = pd.DataFrame(results)
+            ax2.set_xlabel(
+                "False Positive Rate"
+            )
 
-        st.subheader("📊 Model Comparison")
+            ax2.set_ylabel(
+                "True Positive Rate"
+            )
+
+            ax2.legend()
+
+            st.pyplot(fig2)
+
+        except:
+            pass
+
+    # --------------------------------------------------
+    # FEATURE IMPORTANCE
+    # --------------------------------------------------
+
+    if hasattr(model, "feature_importances_"):
+
+        st.subheader("⭐ Feature Importance")
+
+        importance_df = pd.DataFrame({
+
+            "Feature":
+            X.columns,
+
+            "Importance":
+            model.feature_importances_
+        })
+
+        importance_df = (
+            importance_df
+            .sort_values(
+                "Importance",
+                ascending=False
+            )
+            .head(15)
+        )
 
         st.dataframe(
-            results_df,
-            use_container_width=True
+            importance_df
         )
 
-        # -----------------------------------------
-        # BEST MODEL
-        # -----------------------------------------
+        fig3, ax3 = plt.subplots()
 
-        best_model = results_df.sort_values(
-            "R² Score",
-            ascending=False
-        ).iloc[0]
-
-        st.success(
-            f"""
-            🏆 Best Model:
-            {best_model['Model']}
-
-            R² Score:
-            {best_model['R² Score']}
-            """
+        ax3.barh(
+            importance_df["Feature"],
+            importance_df["Importance"]
         )
 
-        # -----------------------------------------
-        # CHARTS
-        # -----------------------------------------
+        ax3.invert_yaxis()
 
-        st.subheader("📈 R² Score Comparison")
-
-        st.bar_chart(
-            results_df.set_index(
-                "Model"
-            )["R² Score"]
-        )
-
-        st.subheader("📉 RMSE Comparison")
-
-        st.bar_chart(
-            results_df.set_index(
-                "Model"
-            )["RMSE"]
-        )
-
-        # -----------------------------------------
-        # DOWNLOAD RESULTS
-        # -----------------------------------------
-
-        csv = results_df.to_csv(
-            index=False
-        )
-
-        st.download_button(
-            "⬇ Download Results",
-            csv,
-            "model_evaluation_results.csv",
-            "text/csv"
-        )
+        st.pyplot(fig3)
 
 else:
 
     st.info(
-        "Upload a CSV dataset to start model evaluation."
+        "Upload a dataset to evaluate the trained model."
     )
