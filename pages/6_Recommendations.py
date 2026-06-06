@@ -7,7 +7,7 @@ import numpy as np
 # ==================================================
 
 st.set_page_config(
-    page_title="Product Recommendations",
+    page_title="Recommendations",
     page_icon="🎯",
     layout="wide"
 )
@@ -15,7 +15,7 @@ st.set_page_config(
 st.title("🎯 Product Recommendation System")
 
 # ==================================================
-# LOAD DATA (SAFE)
+# SAFE DATA LOADING
 # ==================================================
 
 @st.cache_data
@@ -28,17 +28,18 @@ def load_data():
             engine="python",
             on_bad_lines="skip"
         )
+
         return df
 
     except Exception as e:
-        st.error(f"Dataset Error: {e}")
+        st.error(f"Error loading dataset: {e}")
         return pd.DataFrame()
 
 
 df = load_data()
 
-if df.empty:
-    st.error("Dataset not loaded")
+if df is None or df.empty:
+    st.error("Dataset is empty or not loaded properly.")
     st.stop()
 
 # ==================================================
@@ -47,44 +48,32 @@ if df.empty:
 
 df.columns = df.columns.str.strip()
 
-st.write("Detected Columns:", df.columns.tolist())
+st.write("Columns detected:", df.columns.tolist())
 
 # ==================================================
-# AUTO DETECT COLUMNS
+# AUTO DETECT COLUMNS (SAFE)
 # ==================================================
 
 invoice_col = None
 product_col = None
-qty_col = None
 
 for col in df.columns:
 
     c = col.lower()
 
-    if c in ["billno", "invoice", "invoiceno"]:
+    if c in ["billno", "invoice", "invoiceno", "bill no"]:
         invoice_col = col
 
-    if c in ["itemname", "product", "description"]:
+    if c in ["itemname", "product", "description", "stockcode"]:
         product_col = col
-
-    if c in ["qty", "quantity"]:
-        qty_col = col
 
 # ==================================================
 # VALIDATION
 # ==================================================
 
-if invoice_col is None or product_col is None:
+if not invoice_col or not product_col:
 
-    st.error(f"""
-    Required columns missing!
-
-    Invoice Column: {invoice_col}
-    Product Column: {product_col}
-
-    Available Columns:
-    {df.columns.tolist()}
-    """)
+    st.error("Required columns not found!")
     st.stop()
 
 # ==================================================
@@ -94,11 +83,15 @@ if invoice_col is None or product_col is None:
 df = df[[invoice_col, product_col]].dropna()
 df = df.drop_duplicates()
 
+# LIMIT DATA (IMPORTANT FIX FOR CRASH)
+if len(df) > 30000:
+    df = df.sample(30000, random_state=42)
+
 # ==================================================
-# POPULARITY BASED RECOMMENDATION
+# POPULAR PRODUCTS
 # ==================================================
 
-st.subheader("🔥 Top Selling Products")
+st.subheader("🔥 Top Products")
 
 top_products = (
     df.groupby(product_col)
@@ -111,10 +104,8 @@ top_products = (
 st.dataframe(top_products, use_container_width=True)
 
 # ==================================================
-# SIMPLE CO-OCCURRENCE MATRIX
+# CREATE SMALL BASKET (SAFE)
 # ==================================================
-
-st.subheader("🤝 Product Association (Simple Model)")
 
 basket = (
     df.groupby([invoice_col, product_col])
@@ -122,7 +113,20 @@ basket = (
     .unstack(fill_value=0)
 )
 
-basket = basket.applymap(lambda x: 1 if x > 0 else 0)
+# convert to binary safely
+basket = basket.apply(lambda x: (x > 0).astype(int))
+
+# ==================================================
+# LIMIT FEATURES (IMPORTANT FIX)
+# ==================================================
+
+# keep only top 50 products to avoid crash
+top_cols = basket.sum().sort_values(ascending=False).head(50).index
+basket = basket[top_cols]
+
+# ==================================================
+# CO-OCCURRENCE MATRIX
+# ==================================================
 
 co_matrix = basket.T.dot(basket)
 
@@ -131,19 +135,22 @@ np.fill_diagonal(co_matrix.values, 0)
 co_df = pd.DataFrame(co_matrix)
 
 # ==================================================
-# PRODUCT SELECTOR
+# PRODUCT SELECTOR (SAFE)
 # ==================================================
 
-selected_product = st.selectbox(
-    "Select a product",
-    co_df.columns
-)
+if co_df.shape[0] == 0:
+    st.error("Not enough data for recommendations.")
+    st.stop()
+
+selected_product = st.selectbox("Select Product", co_df.columns)
 
 # ==================================================
 # RECOMMENDATIONS
 # ==================================================
 
-if selected_product:
+st.subheader("🎯 Recommended Products")
+
+if selected_product in co_df.columns:
 
     recommendations = (
         co_df[selected_product]
@@ -154,29 +161,26 @@ if selected_product:
 
     recommendations.columns = ["Product", "Score"]
 
-    st.subheader(f"🎯 Recommended products for: {selected_product}")
-
     st.dataframe(recommendations, use_container_width=True)
 
 # ==================================================
-# MOST COMMON PAIRS
+# FREQUENT PAIRS
 # ==================================================
 
 st.subheader("📦 Frequently Bought Together")
 
 pairs = []
 
-for i in range(len(co_df.columns)):
+cols = list(co_df.columns)
 
-    for j in range(i + 1, len(co_df.columns)):
+for i in range(len(cols)):
 
-        prod1 = co_df.columns[i]
-        prod2 = co_df.columns[j]
+    for j in range(i + 1, len(cols)):
 
-        score = co_df.loc[prod1, prod2]
+        score = co_df.loc[cols[i], cols[j]]
 
         if score > 0:
-            pairs.append((prod1, prod2, score))
+            pairs.append((cols[i], cols[j], score))
 
 pairs_df = pd.DataFrame(pairs, columns=["Product 1", "Product 2", "Score"])
 
@@ -195,6 +199,5 @@ else:
 # RAW DATA
 # ==================================================
 
-with st.expander("View Dataset"):
-
+with st.expander("View Data"):
     st.dataframe(df.head(100), use_container_width=True)
