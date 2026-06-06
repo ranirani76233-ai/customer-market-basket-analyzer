@@ -5,7 +5,7 @@ import numpy as np
 from mlxtend.frequent_patterns import apriori
 
 # ==================================================
-# CONFIG
+# PAGE CONFIG
 # ==================================================
 
 st.set_page_config(
@@ -14,7 +14,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🛒 Market Basket Analysis (Smart Hybrid)")
+st.title("🛒 Market Basket Analysis (Smart Recommendation System)")
 
 # ==================================================
 # LOAD DATA
@@ -35,13 +35,17 @@ def load_data():
 df = load_data()
 
 if df.empty:
-    st.error("Dataset not found")
+    st.error("Dataset not loaded")
     st.stop()
+
+# ==================================================
+# CLEAN COLUMNS
+# ==================================================
 
 df.columns = df.columns.str.strip()
 
 # ==================================================
-# DETECT COLUMNS
+# AUTO DETECT COLUMNS
 # ==================================================
 
 invoice_col = None
@@ -57,7 +61,7 @@ for col in df.columns:
         product_col = col
 
 if not invoice_col or not product_col:
-    st.error(f"Missing required columns: {df.columns.tolist()}")
+    st.error(f"Missing columns: {df.columns.tolist()}")
     st.stop()
 
 # ==================================================
@@ -67,15 +71,15 @@ if not invoice_col or not product_col:
 df = df[[invoice_col, product_col]].dropna()
 df = df.drop_duplicates()
 
-# LIMIT SIZE FOR SPEED
+# limit dataset for performance
 if len(df) > 20000:
     df = df.sample(20000, random_state=42)
 
 # ==================================================
-# TOP PRODUCTS (ALWAYS WORKS BASELINE)
+# TOP PRODUCTS
 # ==================================================
 
-st.subheader("🔥 Top Products (Popularity Based)")
+st.subheader("🔥 Top Products")
 
 top_products = (
     df[product_col]
@@ -98,29 +102,56 @@ basket = (
     .unstack(fill_value=0)
 )
 
-basket = basket.apply(lambda x: (x > 0).astype(int))
+basket = basket.astype(bool).astype(int)
+
+if basket.shape[1] < 2:
+    st.error("Not enough product diversity")
+    st.stop()
 
 # ==================================================
-# SIMPLE CO-OCCURRENCE MATRIX (FALLBACK ENGINE)
+# APRIORI (OPTIONAL INSIGHTS)
 # ==================================================
 
-co_matrix = basket.T.dot(basket)
+st.subheader("📦 Frequent Itemsets (Insights Only)")
 
-np.fill_diagonal(co_matrix.values, 0)
+frequent_itemsets = apriori(
+    basket,
+    min_support=0.01,
+    use_colnames=True
+)
 
-co_df = pd.DataFrame(co_matrix)
+if not frequent_itemsets.empty:
+    st.dataframe(
+        frequent_itemsets.sort_values("support", ascending=False).head(10),
+        use_container_width=True
+    )
+else:
+    st.info("No strong frequent itemsets found (this is normal for sparse data).")
+
+# ==================================================
+# SMART RECOMMENDATION ENGINE (FIXED)
+# ==================================================
+
+st.subheader("🎯 Product Recommendation System")
+
+# Convert to numpy for speed
+basket_np = basket.values
+
+# Jaccard similarity
+intersection = basket.T.dot(basket)
+
+sum_vals = basket.sum(axis=0).values.reshape(-1, 1)
+union = sum_vals + sum_vals.T - intersection
+
+similarity = intersection / (union + 1e-9)
+
+co_df = pd.DataFrame(similarity, index=basket.columns, columns=basket.columns)
 
 # ==================================================
 # PRODUCT SELECTOR
 # ==================================================
 
-st.subheader("🎯 Product Recommendations")
-
-selected_product = st.selectbox("Choose a product", co_df.columns)
-
-# ==================================================
-# RECOMMENDATIONS (ALWAYS WORKS)
-# ==================================================
+selected_product = st.selectbox("Select Product", co_df.columns)
 
 recommendations = (
     co_df[selected_product]
@@ -129,50 +160,33 @@ recommendations = (
     .reset_index()
 )
 
-recommendations.columns = ["Product", "Score"]
+recommendations.columns = ["Product", "Similarity Score"]
 
 st.dataframe(recommendations, use_container_width=True)
 
 # ==================================================
-# FREQUENT PAIRS (OPTIONAL INSIGHT)
+# INSIGHT (SAFE)
 # ==================================================
 
-st.subheader("📦 Frequently Bought Together")
+top_match = recommendations.iloc[1]  # skip itself
 
-pairs = []
-
-cols = list(co_df.columns)
-
-for i in range(len(cols)):
-    for j in range(i + 1, len(cols)):
-
-        score = co_df.loc[cols[i], cols[j]]
-
-        if score > 0:
-            pairs.append((cols[i], cols[j], score))
-
-pairs_df = pd.DataFrame(pairs, columns=["Product 1", "Product 2", "Score"])
-
-if not pairs_df.empty:
-    st.dataframe(
-        pairs_df.sort_values("Score", ascending=False).head(15),
-        use_container_width=True
-    )
-else:
-    st.info("No strong product pairs found, showing popularity-based insights instead.")
-
-# ==================================================
-# INSIGHT (ALWAYS SHOWS)
-# ==================================================
-
-top_pair = pairs_df.iloc[0] if not pairs_df.empty else None
-
-st.subheader("💡 Insight")
-
-if top_pair is not None:
-    st.success(f"""
-Customers who buy **{top_pair['Product 1']}**
-also buy **{top_pair['Product 2']}**
+st.success(f"""
+Customers who buy **{selected_product}**
+are also likely to buy **{top_match['Product']}**
+(Score: {top_match['Similarity Score']:.2f})
 """)
-else:
-    st.info("Dataset shows weak co-occurrence. Recommendations are based on popularity model.")
+
+# ==================================================
+# FREQUENT PAIRS (OPTIONAL)
+# ==================================================
+
+st.subheader("📊 Product Relationship Heatmap (Top View)")
+
+st.dataframe(co_df.iloc[:10, :10], use_container_width=True)
+
+# ==================================================
+# DATA VIEW
+# ==================================================
+
+with st.expander("View Dataset"):
+    st.dataframe(df.head(100), use_container_width=True)
