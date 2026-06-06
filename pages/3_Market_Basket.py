@@ -30,6 +30,7 @@ def load_data():
             engine="python",
             on_bad_lines="skip"
         )
+
         return df
 
     except Exception as e:
@@ -52,7 +53,7 @@ df.columns = df.columns.str.strip()
 st.write("Detected Columns:", df.columns.tolist())
 
 # ==================================================
-# AUTO DETECT COLUMNS
+# AUTO DETECT COLUMNS (FIXED)
 # ==================================================
 
 invoice_col = None
@@ -62,10 +63,10 @@ for col in df.columns:
 
     c = col.lower()
 
-    if c in ["billno", "invoice", "invoiceno", "invoiceno"]:
+    if c in ["billno", "bill no", "invoiceno", "invoice_no", "invoice"]:
         invoice_col = col
 
-    if c in ["itemname", "product", "description", "stockcode"]:
+    if c in ["itemname", "product", "description", "stockcode", "item"]:
         product_col = col
 
 # ==================================================
@@ -74,17 +75,16 @@ for col in df.columns:
 
 if invoice_col is None or product_col is None:
 
-    st.error(
-        f"""
-        Required columns not found!
+    st.error(f"""
+    Missing required columns!
 
-        Invoice Column: {invoice_col}
-        Product Column: {product_col}
+    Invoice Column Found: {invoice_col}
+    Product Column Found: {product_col}
 
-        Available Columns:
-        {df.columns.tolist()}
-        """
-    )
+    Available Columns:
+    {df.columns.tolist()}
+    """)
+
     st.stop()
 
 # ==================================================
@@ -93,20 +93,30 @@ if invoice_col is None or product_col is None:
 
 df = df[[invoice_col, product_col]].dropna()
 
-# remove duplicates
 df = df.drop_duplicates()
 
 # ==================================================
-# CREATE BASKET MATRIX
+# LIMIT DATA (IMPORTANT FIX FOR CRASH)
 # ==================================================
 
-basket = (
-    df.groupby([invoice_col, product_col])
-    .size()
-    .unstack(fill_value=0)
-)
+if len(df) > 50000:
+    df = df.sample(50000, random_state=42)
+
+# ==================================================
+# CREATE BASKET
+# ==================================================
+
+basket = df.groupby([invoice_col, product_col]).size().unstack(fill_value=0)
 
 basket = basket.applymap(lambda x: 1 if x > 0 else 0)
+
+# ==================================================
+# SAFETY CHECK
+# ==================================================
+
+if basket.shape[1] < 2:
+    st.error("Not enough products for Market Basket Analysis")
+    st.stop()
 
 # ==================================================
 # SIDEBAR SETTINGS
@@ -148,7 +158,7 @@ st.dataframe(
 )
 
 # ==================================================
-# TOP ITEMSETS CHART
+# TOP ITEMSETS
 # ==================================================
 
 top_itemsets = frequent_itemsets.sort_values("support", ascending=False).head(10)
@@ -212,18 +222,16 @@ st.subheader("💡 Business Insights")
 
 top_rule = rules.sort_values("lift", ascending=False).iloc[0]
 
-st.success(
-    f"""
-    If customers buy:
-    {top_rule['antecedents']}
+st.success(f"""
+If customers buy:
+{top_rule['antecedents']}
 
-    They also buy:
-    {top_rule['consequents']}
+They also buy:
+{top_rule['consequents']}
 
-    Confidence: {top_rule['confidence']:.2f}
-    Lift: {top_rule['lift']:.2f}
-    """
-)
+Confidence: {top_rule['confidence']:.2f}
+Lift: {top_rule['lift']:.2f}
+""")
 
 # ==================================================
 # RAW DATA
