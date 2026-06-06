@@ -17,39 +17,39 @@ st.set_page_config(
 st.title("🛒 Market Basket Analysis")
 
 # ==================================================
-# LOAD DATA
+# LOAD DATA (SAFE)
 # ==================================================
 
 @st.cache_data
 def load_data():
 
     try:
-
         df = pd.read_csv(
             "data/Assignment-1_Data.csv.csv",
             sep=None,
             engine="python",
             on_bad_lines="skip"
         )
+        return df
 
     except Exception as e:
-
-        st.error(f"Dataset Error: {e}")
+        st.error(f"Error loading dataset: {e}")
         return pd.DataFrame()
-
-    return df
 
 
 df = load_data()
 
 if df.empty:
+    st.error("Dataset is empty or failed to load.")
     st.stop()
 
 # ==================================================
-# CLEAN COLUMN NAMES
+# CLEAN COLUMNS
 # ==================================================
 
 df.columns = df.columns.str.strip()
+
+st.write("Detected Columns:", df.columns.tolist())
 
 # ==================================================
 # AUTO DETECT COLUMNS
@@ -62,80 +62,66 @@ for col in df.columns:
 
     c = col.lower()
 
-    if c in [
-        "billno",
-        "invoice",
-        "invoiceno",
-        "invoice_no"
-    ]:
+    if c in ["billno", "invoice", "invoiceno", "invoiceno"]:
         invoice_col = col
 
-    if c in [
-        "itemname",
-        "description",
-        "product",
-        "productname"
-    ]:
+    if c in ["itemname", "product", "description", "stockcode"]:
         product_col = col
+
+# ==================================================
+# VALIDATION
+# ==================================================
 
 if invoice_col is None or product_col is None:
 
     st.error(
         f"""
-        Required columns not found.
+        Required columns not found!
 
         Invoice Column: {invoice_col}
         Product Column: {product_col}
 
         Available Columns:
-        {list(df.columns)}
+        {df.columns.tolist()}
         """
     )
-
     st.stop()
 
 # ==================================================
-# CREATE BASKET
+# CLEAN DATA
+# ==================================================
+
+df = df[[invoice_col, product_col]].dropna()
+
+# remove duplicates
+df = df.drop_duplicates()
+
+# ==================================================
+# CREATE BASKET MATRIX
 # ==================================================
 
 basket = (
-
-    df.groupby(
-        [invoice_col, product_col]
-    )
-
+    df.groupby([invoice_col, product_col])
     .size()
-
-    .unstack()
-
-    .fillna(0)
-
+    .unstack(fill_value=0)
 )
 
-basket = basket.applymap(
-    lambda x: 1 if x > 0 else 0
-)
+basket = basket.applymap(lambda x: 1 if x > 0 else 0)
 
 # ==================================================
-# SETTINGS
+# SIDEBAR SETTINGS
 # ==================================================
 
-st.sidebar.header("Analysis Settings")
+st.sidebar.header("Settings")
 
 min_support = st.sidebar.slider(
-    "Minimum Support",
-    0.01,
-    0.20,
-    0.02,
-    0.01
+    "Min Support",
+    0.01, 0.2, 0.02
 )
 
 min_confidence = st.sidebar.slider(
-    "Minimum Confidence",
-    0.10,
-    1.00,
-    0.30,
-    0.05
+    "Min Confidence",
+    0.1, 1.0, 0.3
 )
 
 # ==================================================
@@ -144,30 +130,20 @@ min_confidence = st.sidebar.slider(
 
 st.subheader("📦 Frequent Itemsets")
 
-frequent_items = apriori(
+frequent_itemsets = apriori(
     basket,
     min_support=min_support,
     use_colnames=True
 )
 
-if frequent_items.empty:
-
-    st.warning(
-        "No frequent itemsets found."
-    )
-
+if frequent_itemsets.empty:
+    st.warning("No frequent itemsets found.")
     st.stop()
 
-frequent_items["Itemsets"] = (
-    frequent_items["itemsets"]
-    .astype(str)
-)
+frequent_itemsets["itemsets"] = frequent_itemsets["itemsets"].astype(str)
 
 st.dataframe(
-    frequent_items.sort_values(
-        "support",
-        ascending=False
-    ).head(20),
+    frequent_itemsets.sort_values("support", ascending=False).head(20),
     use_container_width=True
 )
 
@@ -175,37 +151,17 @@ st.dataframe(
 # TOP ITEMSETS CHART
 # ==================================================
 
-top_itemsets = (
-
-    frequent_items
-
-    .sort_values(
-        "support",
-        ascending=False
-    )
-
-    .head(10)
-
-)
+top_itemsets = frequent_itemsets.sort_values("support", ascending=False).head(10)
 
 fig = px.bar(
-
     top_itemsets,
-
     x="support",
-
-    y="Itemsets",
-
+    y="itemsets",
     orientation="h",
-
     title="Top Frequent Itemsets"
-
 )
 
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
+st.plotly_chart(fig, use_container_width=True)
 
 # ==================================================
 # ASSOCIATION RULES
@@ -214,142 +170,64 @@ st.plotly_chart(
 st.subheader("🔗 Association Rules")
 
 rules = association_rules(
-    frequent_items,
+    frequent_itemsets,
     metric="confidence",
     min_threshold=min_confidence
 )
 
 if rules.empty:
+    st.warning("No association rules found.")
+    st.stop()
 
-    st.warning(
-        "No association rules found."
-    )
+rules["antecedents"] = rules["antecedents"].astype(str)
+rules["consequents"] = rules["consequents"].astype(str)
 
-else:
-
-    rules["Antecedents"] = (
-        rules["antecedents"]
-        .astype(str)
-    )
-
-    rules["Consequents"] = (
-        rules["consequents"]
-        .astype(str)
-    )
-
-    display_rules = rules[[
-        "Antecedents",
-        "Consequents",
-        "support",
-        "confidence",
-        "lift"
-    ]]
-
-    st.dataframe(
-        display_rules.sort_values(
-            "lift",
-            ascending=False
-        ),
-        use_container_width=True
-    )
+st.dataframe(
+    rules[["antecedents", "consequents", "support", "confidence", "lift"]]
+    .sort_values("lift", ascending=False),
+    use_container_width=True
+)
 
 # ==================================================
-# LIFT VS CONFIDENCE
+# VISUALIZATION
 # ==================================================
 
-if not rules.empty:
+st.subheader("📊 Lift vs Confidence")
 
-    st.subheader("📊 Lift vs Confidence")
+fig = px.scatter(
+    rules,
+    x="confidence",
+    y="lift",
+    size="support",
+    hover_data=["antecedents", "consequents"]
+)
 
-    fig = px.scatter(
-
-        rules,
-
-        x="confidence",
-
-        y="lift",
-
-        size="support",
-
-        hover_data=[
-            "Antecedents",
-            "Consequents"
-        ]
-
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
+st.plotly_chart(fig, use_container_width=True)
 
 # ==================================================
-# PRODUCT RECOMMENDATIONS
+# INSIGHTS
 # ==================================================
 
-if not rules.empty:
+st.subheader("💡 Business Insights")
 
-    st.subheader("🎯 Product Recommendations")
+top_rule = rules.sort_values("lift", ascending=False).iloc[0]
 
-    top_rules = (
-
-        rules
-
-        .sort_values(
-            "lift",
-            ascending=False
-        )
-
-        .head(10)
-
-    )
-
-    for _, row in top_rules.iterrows():
-
-        st.success(
-
-            f"""
-            Customers buying
-            {row['Antecedents']}
-            also buy
-            {row['Consequents']}
-
-            Confidence:
-            {row['confidence']:.2f}
-
-            Lift:
-            {row['lift']:.2f}
-            """
-
-        )
-
-# ==================================================
-# BUSINESS INSIGHTS
-# ==================================================
-
-st.subheader("💡 Market Basket Insights")
-
-st.info(
+st.success(
     f"""
-    Total Transactions: {basket.shape[0]}
+    If customers buy:
+    {top_rule['antecedents']}
 
-    Total Products: {basket.shape[1]}
+    They also buy:
+    {top_rule['consequents']}
 
-    Frequent Itemsets Found:
-    {len(frequent_items)}
-
-    Association Rules Found:
-    {len(rules)}
+    Confidence: {top_rule['confidence']:.2f}
+    Lift: {top_rule['lift']:.2f}
     """
 )
 
 # ==================================================
-# DATA PREVIEW
+# RAW DATA
 # ==================================================
 
-with st.expander("View Source Data"):
-
-    st.dataframe(
-        df.head(100),
-        use_container_width=True
-    )
+with st.expander("View Dataset"):
+    st.dataframe(df.head(100), use_container_width=True)
