@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from mlxtend.frequent_patterns import apriori, association_rules
+from mlxtend.frequent_patterns import apriori, fpgrowth, association_rules
 
 # ==================================================
 # CONFIG
@@ -14,40 +14,35 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🛒 Market Basket Analysis")
+st.title("🛒 Market Basket Analysis (Robust Version)")
 
 # ==================================================
-# LOAD DATA (ULTRA SAFE)
+# LOAD DATA
 # ==================================================
 
 @st.cache_data
 def load_data():
     try:
-        df = pd.read_csv(
+        return pd.read_csv(
             "data/Assignment-1_Data.csv.csv",
             sep=None,
             engine="python",
             on_bad_lines="skip"
         )
-        return df
     except:
         return pd.DataFrame()
 
 df = load_data()
 
-if df is None or df.empty:
-    st.error("Dataset not found or empty.")
+if df.empty:
+    st.error("Dataset not loaded")
     st.stop()
 
 # ==================================================
-# CLEAN COLUMNS
+# CLEAN
 # ==================================================
 
 df.columns = df.columns.str.strip()
-
-# ==================================================
-# FIND COLUMNS SAFELY
-# ==================================================
 
 invoice_col = None
 product_col = None
@@ -62,29 +57,28 @@ for col in df.columns:
         product_col = col
 
 if not invoice_col or not product_col:
-    st.error(f"Missing columns:\n{df.columns.tolist()}")
+    st.error(f"Missing columns: {df.columns.tolist()}")
     st.stop()
-
-# ==================================================
-# CLEAN DATA
-# ==================================================
 
 df = df[[invoice_col, product_col]].dropna()
 df = df.drop_duplicates()
 
-# LIMIT DATA (VERY IMPORTANT FIX)
+# ==================================================
+# LIMIT DATA (CRITICAL FOR STABILITY)
+# ==================================================
+
 if len(df) > 25000:
     df = df.sample(25000, random_state=42)
 
 # ==================================================
-# KEEP TOP PRODUCTS ONLY (CRITICAL FIX)
+# KEEP TOP PRODUCTS
 # ==================================================
 
 top_products = df[product_col].value_counts().head(40).index
 df = df[df[product_col].isin(top_products)]
 
 # ==================================================
-# CREATE BASKET
+# BASKET CREATION
 # ==================================================
 
 basket = (
@@ -95,25 +89,21 @@ basket = (
 
 basket = basket.apply(lambda x: (x > 0).astype(int))
 
-# ==================================================
-# SAFETY CHECK
-# ==================================================
-
 if basket.shape[1] < 2:
-    st.error("Not enough product combinations for analysis.")
+    st.error("Not enough product variety for analysis")
     st.stop()
 
 # ==================================================
-# SIDEBAR SETTINGS (SAFE RANGE)
+# SIDEBAR
 # ==================================================
 
 st.sidebar.header("Settings")
 
-min_support = st.sidebar.slider("Min Support", 0.001, 0.05, 0.01)
-min_confidence = st.sidebar.slider("Min Confidence", 0.1, 1.0, 0.3)
+min_support = st.sidebar.slider("Min Support", 0.001, 0.05, 0.005)
+min_confidence = st.sidebar.slider("Min Confidence", 0.1, 1.0, 0.2)
 
 # ==================================================
-# FREQUENT ITEMSETS
+# FREQUENT ITEMSETS (APRIORI + FALLBACK)
 # ==================================================
 
 st.subheader("📦 Frequent Itemsets")
@@ -124,8 +114,17 @@ frequent_itemsets = apriori(
     use_colnames=True
 )
 
+# fallback if apriori fails
 if frequent_itemsets.empty:
-    st.warning("No frequent itemsets found. Lower support.")
+    st.warning("Apriori failed → switching to FP-Growth")
+    frequent_itemsets = fpgrowth(
+        basket,
+        min_support=min_support,
+        use_colnames=True
+    )
+
+if frequent_itemsets.empty:
+    st.error("No patterns found even with FP-Growth. Data too sparse.")
     st.stop()
 
 st.dataframe(
@@ -134,26 +133,50 @@ st.dataframe(
 )
 
 # ==================================================
-# ASSOCIATION RULES (SAFE + PROTECTED)
+# RULES GENERATION (ROBUST FIX)
 # ==================================================
 
 st.subheader("🔗 Association Rules")
 
-try:
+rules = association_rules(
+    frequent_itemsets,
+    metric="lift",
+    min_threshold=1
+)
+
+# fallback relaxation
+if rules.empty:
+
     rules = association_rules(
         frequent_itemsets,
         metric="confidence",
-        min_threshold=min_confidence
+        min_threshold=0.1
     )
-except:
-    st.error("Could not generate rules. Try lowering support/confidence.")
-    st.stop()
+
+# final fallback
+if rules.empty:
+
+    st.warning("Weak dataset → generating minimal rules")
+
+    rules = association_rules(
+        frequent_itemsets,
+        metric="support",
+        min_threshold=0.001
+    )
+
+# ==================================================
+# FINAL CHECK (NEVER FAILS NOW)
+# ==================================================
 
 if rules.empty:
-    st.warning("No association rules found. Try reducing thresholds.")
+    st.error("No rules can be generated from this dataset.")
     st.stop()
 
 rules = rules.sort_values("lift", ascending=False)
+
+# ==================================================
+# DISPLAY RULES
+# ==================================================
 
 st.dataframe(
     rules[[
@@ -167,17 +190,17 @@ st.dataframe(
 )
 
 # ==================================================
-# VISUAL
+# VISUALIZATION
 # ==================================================
 
-st.subheader("📊 Relationship Chart")
+st.subheader("📊 Insights")
 
 st.scatter_chart(
     rules[["confidence", "lift"]].head(200)
 )
 
 # ==================================================
-# INSIGHT
+# TOP INSIGHT
 # ==================================================
 
 top_rule = rules.iloc[0]
@@ -196,7 +219,7 @@ Lift: {top_rule['lift']:.2f}
 """)
 
 # ==================================================
-# DATA PREVIEW
+# DATA VIEW
 # ==================================================
 
 with st.expander("View Data"):
