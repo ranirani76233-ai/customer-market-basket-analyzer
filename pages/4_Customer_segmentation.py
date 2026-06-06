@@ -1,492 +1,275 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
-
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 
-# =====================================================
+# ==================================================
 # PAGE CONFIG
-# =====================================================
+# ==================================================
 
 st.set_page_config(
     page_title="Customer Segmentation",
-    page_icon="🎯",
+    page_icon="👥",
     layout="wide"
 )
 
-st.title("🎯 Customer Segmentation")
+st.title("👥 Customer Segmentation Dashboard")
 
-# =====================================================
-# LOAD DATA
-# =====================================================
+# ==================================================
+# LOAD DATA (SAFE)
+# ==================================================
 
 @st.cache_data
 def load_data():
 
-    df = pd.read_csv(
-        'data/Assignment-1_Data.csv'
-        
-    )
+    try:
+        df = pd.read_csv(
+            "data/Assignment-1_Data.csv.csv",
+            sep=None,
+            engine="python",
+            on_bad_lines="skip"
+        )
+        return df
 
-    return df
+    except Exception as e:
+        st.error(f"Error loading dataset: {e}")
+        return pd.DataFrame()
 
 
 df = load_data()
 
-# =====================================================
-# DATA PREPARATION
-# =====================================================
-
-if "Date" in df.columns:
-    df["Date"] = pd.to_datetime(
-        df["Date"],
-        errors="coerce"
-    )
-
-if (
-    "Qty" in df.columns and
-    "Price" in df.columns
-):
-    df["Revenue"] = (
-        df["Qty"] * df["Price"]
-    )
-
-required_cols = [
-    "CustomerID",
-    "BillNo",
-    "Revenue",
-    "Date"
-]
-
-missing_cols = [
-    col for col in required_cols
-    if col not in df.columns
-]
-
-if missing_cols:
-
-    st.error(
-        f"Missing columns: {missing_cols}"
-    )
-
+if df.empty:
+    st.error("Dataset is empty or failed to load.")
     st.stop()
 
-# =====================================================
-# CREATE RFM
-# =====================================================
+# ==================================================
+# CLEAN COLUMNS
+# ==================================================
 
-snapshot_date = df["Date"].max()
+df.columns = df.columns.str.strip()
 
-rfm = (
+st.write("Detected Columns:", df.columns.tolist())
 
-    df.groupby("CustomerID")
+# ==================================================
+# AUTO DETECT COLUMNS
+# ==================================================
 
-    .agg({
+customer_col = None
+date_col = None
+qty_col = None
+price_col = None
+invoice_col = None
 
-        "Date":
-        lambda x:
-        (snapshot_date - x.max()).days,
+for col in df.columns:
 
-        "BillNo":
-        "nunique",
+    c = col.lower()
 
-        "Revenue":
-        "sum"
+    if c in ["customerid", "customer_id"]:
+        customer_col = col
 
-    })
+    elif c in ["date", "invoicedate"]:
+        date_col = col
 
-    .reset_index()
+    elif c in ["qty", "quantity"]:
+        qty_col = col
 
-)
+    elif c in ["price", "unitprice"]:
+        price_col = col
 
-rfm.columns = [
+    elif c in ["billno", "invoice", "invoiceno"]:
+        invoice_col = col
 
-    "CustomerID",
+# ==================================================
+# VALIDATION
+# ==================================================
 
-    "Recency",
+if customer_col is None:
 
-    "Frequency",
+    st.error(f"""
+    Customer column not found!
 
-    "Monetary"
+    Available Columns:
+    {df.columns.tolist()}
+    """)
+    st.stop()
 
-]
+# ==================================================
+# CONVERT DATA TYPES
+# ==================================================
 
-# =====================================================
-# RFM KPIs
-# =====================================================
+if qty_col:
+    df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce")
 
-st.subheader("📊 RFM Overview")
+if price_col:
+    df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
+
+if date_col:
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+
+# ==================================================
+# CREATE REVENUE
+# ==================================================
+
+if qty_col and price_col:
+
+    df["Revenue"] = (
+        df[qty_col].fillna(0) *
+        df[price_col].fillna(0)
+    )
+
+else:
+
+    st.error("Revenue cannot be created (Qty/Price missing)")
+    st.stop()
+
+# ==================================================
+# RFM ANALYSIS
+# ==================================================
+
+st.subheader("📊 RFM Analysis")
+
+if date_col:
+
+    snapshot_date = df[date_col].max() + pd.Timedelta(days=1)
+
+    rfm = df.groupby(customer_col).agg({
+
+        date_col: lambda x: (snapshot_date - x.max()).days,
+        invoice_col if invoice_col else customer_col: "nunique",
+        "Revenue": "sum"
+
+    }).reset_index()
+
+    rfm.columns = [
+        "CustomerID",
+        "Recency",
+        "Frequency",
+        "Monetary"
+    ]
+
+else:
+
+    rfm = df.groupby(customer_col).agg({
+
+        "Revenue": "sum"
+
+    }).reset_index()
+
+    rfm["Recency"] = 0
+    rfm["Frequency"] = 1
+    rfm.rename(columns={"Revenue": "Monetary"}, inplace=True)
+
+# ==================================================
+# KPIs
+# ==================================================
 
 col1, col2, col3 = st.columns(3)
 
-col1.metric(
-    "Avg Recency",
-    round(rfm["Recency"].mean(), 1)
-)
+col1.metric("Customers", len(rfm))
+col2.metric("Avg Spend", f"${rfm['Monetary'].mean():,.0f}")
+col3.metric("Max Spend", f"${rfm['Monetary'].max():,.0f}")
 
-col2.metric(
-    "Avg Frequency",
-    round(rfm["Frequency"].mean(), 1)
-)
+# ==================================================
+# CLUSTERING
+# ==================================================
 
-col3.metric(
-    "Avg Monetary",
-    round(rfm["Monetary"].mean(), 2)
-)
+st.subheader("🤖 Customer Segmentation (KMeans)")
 
-# =====================================================
-# ELBOW METHOD
-# =====================================================
-
-st.subheader("📈 Elbow Method")
-
-X = rfm[[
-    "Recency",
-    "Frequency",
-    "Monetary"
-]]
+features = rfm[["Recency", "Frequency", "Monetary"]]
 
 scaler = StandardScaler()
+scaled = scaler.fit_transform(features)
 
-X_scaled = scaler.fit_transform(X)
-
-inertia = []
-
-for k in range(2, 11):
-
-    model = KMeans(
-        n_clusters=k,
-        random_state=42,
-        n_init=10
-    )
-
-    model.fit(X_scaled)
-
-    inertia.append(
-        model.inertia_
-    )
-
-elbow_df = pd.DataFrame({
-
-    "Clusters":
-    range(2, 11),
-
-    "Inertia":
-    inertia
-
-})
-
-fig = px.line(
-
-    elbow_df,
-
-    x="Clusters",
-
-    y="Inertia",
-
-    markers=True,
-
-    title="Elbow Method"
-
+n_clusters = st.sidebar.slider(
+    "Number of Segments",
+    2, 10, 4
 )
 
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-# =====================================================
-# CLUSTER SELECTION
-# =====================================================
-
-st.subheader("⚙ Segmentation Settings")
-
-n_clusters = st.slider(
-
-    "Select Number of Clusters",
-
-    min_value=2,
-
-    max_value=10,
-
-    value=4
-
-)
-
-# =====================================================
-# KMEANS
-# =====================================================
-
-kmeans = KMeans(
-
+model = KMeans(
     n_clusters=n_clusters,
-
     random_state=42,
-
     n_init=10
-
 )
 
-rfm["Segment"] = kmeans.fit_predict(
-    X_scaled
-)
+rfm["Cluster"] = model.fit_predict(scaled)
 
-# =====================================================
-# SEGMENT LABELS
-# =====================================================
+# ==================================================
+# CLUSTER SUMMARY
+# ==================================================
 
-segment_map = {
+cluster_summary = rfm.groupby("Cluster").agg({
 
-    0: "Champions",
+    "Recency": "mean",
+    "Frequency": "mean",
+    "Monetary": "mean"
 
-    1: "Loyal Customers",
+}).round(2)
 
-    2: "Potential Customers",
+st.dataframe(cluster_summary, use_container_width=True)
 
-    3: "At Risk",
-
-    4: "Lost Customers",
-
-    5: "Big Spenders",
-
-    6: "Frequent Buyers",
-
-    7: "Occasional Buyers",
-
-    8: "New Customers",
-
-    9: "Dormant Customers"
-
-}
-
-rfm["Segment_Name"] = (
-
-    rfm["Segment"]
-
-    .map(segment_map)
-
-    .fillna("Customer Segment")
-
-)
-
-# =====================================================
+# ==================================================
 # SEGMENT DISTRIBUTION
-# =====================================================
+# ==================================================
 
-st.subheader("👥 Customer Distribution")
+st.subheader("📈 Segment Distribution")
 
-segment_counts = (
+fig = px.pie(rfm, names="Cluster")
+st.plotly_chart(fig, use_container_width=True)
 
-    rfm["Segment_Name"]
+# ==================================================
+# CUSTOMER VALUE MAP
+# ==================================================
 
-    .value_counts()
-
-    .reset_index()
-
-)
-
-segment_counts.columns = [
-
-    "Segment",
-
-    "Customers"
-
-]
-
-fig = px.pie(
-
-    segment_counts,
-
-    names="Segment",
-
-    values="Customers",
-
-    hole=0.4
-
-)
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-# =====================================================
-# CLUSTER VISUALIZATION
-# =====================================================
-
-st.subheader("🎯 Customer Segments")
+st.subheader("💰 Customer Value Map")
 
 fig = px.scatter(
-
     rfm,
-
     x="Frequency",
-
     y="Monetary",
-
-    color="Segment_Name",
-
+    color="Cluster",
     size="Monetary",
-
-    hover_data=[
-        "CustomerID",
-        "Recency"
-    ],
-
-    title="Customer Segmentation"
-
+    hover_data=["CustomerID"]
 )
 
-st.plotly_chart(
-    fig,
-    use_container_width=True
+st.plotly_chart(fig, use_container_width=True)
+
+# ==================================================
+# RECENCY ANALYSIS
+# ==================================================
+
+st.subheader("⏰ Recency Analysis")
+
+fig = px.box(
+    rfm,
+    x="Cluster",
+    y="Recency",
+    color="Cluster"
 )
 
-# =====================================================
-# SEGMENT PROFILE
-# =====================================================
+st.plotly_chart(fig, use_container_width=True)
 
-st.subheader("📋 Segment Profiles")
+# ==================================================
+# TOP CUSTOMERS
+# ==================================================
 
-segment_profile = (
+st.subheader("🏆 Top Customers")
 
-    rfm.groupby(
-        "Segment_Name"
-    )
+top_customers = rfm.sort_values("Monetary", ascending=False).head(20)
 
-    .agg({
+st.dataframe(top_customers, use_container_width=True)
 
-        "Recency":
-        "mean",
+# ==================================================
+# INSIGHTS
+# ==================================================
 
-        "Frequency":
-        "mean",
+best_cluster = rfm.groupby("Cluster")["Monetary"].mean().idxmax()
 
-        "Monetary":
-        "mean",
+st.success(f"""
+Best Customer Segment: Cluster {best_cluster}
 
-        "CustomerID":
-        "count"
+Total Customers: {len(rfm)}
 
-    })
-
-    .round(2)
-
-    .reset_index()
-
-)
-
-segment_profile.columns = [
-
-    "Segment",
-
-    "Avg Recency",
-
-    "Avg Frequency",
-
-    "Avg Monetary",
-
-    "Customers"
-
-]
-
-st.dataframe(
-    segment_profile,
-    use_container_width=True
-)
-
-# =====================================================
-# SEGMENT FILTER
-# =====================================================
-
-st.subheader("🔍 Explore Segment")
-
-selected_segment = st.selectbox(
-
-    "Choose Segment",
-
-    sorted(
-        rfm["Segment_Name"].unique()
-    )
-
-)
-
-segment_customers = rfm[
-    rfm["Segment_Name"]
-    == selected_segment
-]
-
-st.dataframe(
-
-    segment_customers,
-
-    use_container_width=True
-
-)
-
-# =====================================================
-# BUSINESS RECOMMENDATIONS
-# =====================================================
-
-st.subheader("💡 Recommendations")
-
-st.success(
-    """
-    Champions:
-    Reward with exclusive offers and loyalty programs.
-
-    Loyal Customers:
-    Upsell premium products and memberships.
-
-    Potential Customers:
-    Encourage repeat purchases with targeted campaigns.
-
-    At Risk:
-    Send reactivation emails and discounts.
-
-    Lost Customers:
-    Run win-back campaigns and personalized promotions.
-    """
-)
-
-# =====================================================
-# DOWNLOAD RESULTS
-# =====================================================
-
-st.subheader("📥 Export Segments")
-
-csv = rfm.to_csv(
-    index=False
-).encode("utf-8")
-
-st.download_button(
-
-    label="Download Customer Segments",
-
-    data=csv,
-
-    file_name="customer_segments.csv",
-
-    mime="text/csv"
-
-)
-
-# =====================================================
-# SAVE MODEL OPTION
-# =====================================================
-
-st.subheader("💾 Save Segmentation Model")
-
-if st.button("Save KMeans Model"):
-
-    import joblib
-
-    joblib.dump(
-        kmeans,
-        "models/customer_segmentation.pkl"
-    )
-
-    st.success(
-        "Model saved to models/customer_segmentation.pkl"
-    )
+Average Revenue: ${rfm['Monetary'].mean():,.2f}
+""")
