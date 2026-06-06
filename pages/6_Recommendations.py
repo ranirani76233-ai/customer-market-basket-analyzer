@@ -1,462 +1,200 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import numpy as np
 
-# =====================================================
+# ==================================================
 # PAGE CONFIG
-# =====================================================
+# ==================================================
 
 st.set_page_config(
-    page_title="Recommendations",
-    page_icon="💡",
+    page_title="Product Recommendations",
+    page_icon="🎯",
     layout="wide"
 )
 
-st.title("💡 Smart Recommendation Engine")
+st.title("🎯 Product Recommendation System")
 
-# =====================================================
-# LOAD DATA
-# =====================================================
+# ==================================================
+# LOAD DATA (SAFE)
+# ==================================================
 
 @st.cache_data
 def load_data():
 
-    df = pd.read_csv(
-        'data/Assignment-1_Data.csv'
-       
-    )
-
-    return df
-
-# =====================================================
-# LOAD ASSOCIATION RULES
-# =====================================================
-
-@st.cache_data
-def load_rules():
-
     try:
-
-        rules = pd.read_csv(
-            "reports/association_rules.csv"
+        df = pd.read_csv(
+            "data/Assignment-1_Data.csv.csv",
+            sep=None,
+            engine="python",
+            on_bad_lines="skip"
         )
+        return df
 
-        return rules
-
-    except:
-
+    except Exception as e:
+        st.error(f"Dataset Error: {e}")
         return pd.DataFrame()
 
-# =====================================================
-# LOAD CUSTOMER SEGMENTS
-# =====================================================
-
-@st.cache_data
-def load_segments():
-
-    try:
-
-        segments = pd.read_csv(
-            "reports/customer_segments.csv"
-        )
-
-        return segments
-
-    except:
-
-        return pd.DataFrame()
-
-# =====================================================
-# DATA
-# =====================================================
 
 df = load_data()
-rules = load_rules()
-segments = load_segments()
 
-# =====================================================
-# PRODUCT RECOMMENDATIONS
-# =====================================================
+if df.empty:
+    st.error("Dataset not loaded")
+    st.stop()
 
-st.header("🛒 Product Recommendations")
+# ==================================================
+# CLEAN COLUMNS
+# ==================================================
 
-if not rules.empty:
+df.columns = df.columns.str.strip()
 
-    products = sorted(
-        df["Itemname"].dropna().unique()
+st.write("Detected Columns:", df.columns.tolist())
+
+# ==================================================
+# AUTO DETECT COLUMNS
+# ==================================================
+
+invoice_col = None
+product_col = None
+qty_col = None
+
+for col in df.columns:
+
+    c = col.lower()
+
+    if c in ["billno", "invoice", "invoiceno"]:
+        invoice_col = col
+
+    if c in ["itemname", "product", "description"]:
+        product_col = col
+
+    if c in ["qty", "quantity"]:
+        qty_col = col
+
+# ==================================================
+# VALIDATION
+# ==================================================
+
+if invoice_col is None or product_col is None:
+
+    st.error(f"""
+    Required columns missing!
+
+    Invoice Column: {invoice_col}
+    Product Column: {product_col}
+
+    Available Columns:
+    {df.columns.tolist()}
+    """)
+    st.stop()
+
+# ==================================================
+# CLEAN DATA
+# ==================================================
+
+df = df[[invoice_col, product_col]].dropna()
+df = df.drop_duplicates()
+
+# ==================================================
+# POPULARITY BASED RECOMMENDATION
+# ==================================================
+
+st.subheader("🔥 Top Selling Products")
+
+top_products = (
+    df.groupby(product_col)
+    .size()
+    .reset_index(name="Count")
+    .sort_values("Count", ascending=False)
+    .head(10)
+)
+
+st.dataframe(top_products, use_container_width=True)
+
+# ==================================================
+# SIMPLE CO-OCCURRENCE MATRIX
+# ==================================================
+
+st.subheader("🤝 Product Association (Simple Model)")
+
+basket = (
+    df.groupby([invoice_col, product_col])
+    .size()
+    .unstack(fill_value=0)
+)
+
+basket = basket.applymap(lambda x: 1 if x > 0 else 0)
+
+co_matrix = basket.T.dot(basket)
+
+np.fill_diagonal(co_matrix.values, 0)
+
+co_df = pd.DataFrame(co_matrix)
+
+# ==================================================
+# PRODUCT SELECTOR
+# ==================================================
+
+selected_product = st.selectbox(
+    "Select a product",
+    co_df.columns
+)
+
+# ==================================================
+# RECOMMENDATIONS
+# ==================================================
+
+if selected_product:
+
+    recommendations = (
+        co_df[selected_product]
+        .sort_values(ascending=False)
+        .head(10)
+        .reset_index()
     )
 
-    selected_product = st.selectbox(
-        "Select Product",
-        products
+    recommendations.columns = ["Product", "Score"]
+
+    st.subheader(f"🎯 Recommended products for: {selected_product}")
+
+    st.dataframe(recommendations, use_container_width=True)
+
+# ==================================================
+# MOST COMMON PAIRS
+# ==================================================
+
+st.subheader("📦 Frequently Bought Together")
+
+pairs = []
+
+for i in range(len(co_df.columns)):
+
+    for j in range(i + 1, len(co_df.columns)):
+
+        prod1 = co_df.columns[i]
+        prod2 = co_df.columns[j]
+
+        score = co_df.loc[prod1, prod2]
+
+        if score > 0:
+            pairs.append((prod1, prod2, score))
+
+pairs_df = pd.DataFrame(pairs, columns=["Product 1", "Product 2", "Score"])
+
+if not pairs_df.empty:
+
+    st.dataframe(
+        pairs_df.sort_values("Score", ascending=False).head(15),
+        use_container_width=True
     )
-
-    recommendations = rules[
-
-        rules["antecedents"]
-        .astype(str)
-        .str.contains(
-            selected_product,
-            case=False,
-            na=False
-        )
-
-    ]
-
-    if not recommendations.empty:
-
-        st.success(
-            f"Recommended Products for: {selected_product}"
-        )
-
-        st.dataframe(
-
-            recommendations[
-                [
-                    "antecedents",
-                    "consequents",
-                    "confidence",
-                    "lift"
-                ]
-            ],
-
-            use_container_width=True
-
-        )
-
-    else:
-
-        st.warning(
-            "No recommendations found."
-        )
 
 else:
 
-    st.warning(
-        "Association rules file not found."
-    )
+    st.warning("No strong product pairs found.")
 
-# =====================================================
-# TOP PRODUCT BUNDLES
-# =====================================================
+# ==================================================
+# RAW DATA
+# ==================================================
 
-st.header("🎁 Top Product Bundles")
+with st.expander("View Dataset"):
 
-if not rules.empty:
-
-    top_bundles = (
-
-        rules
-
-        .sort_values(
-            "lift",
-            ascending=False
-        )
-
-        .head(20)
-
-    )
-
-    fig = px.bar(
-
-        top_bundles,
-
-        x="lift",
-
-        y="antecedents",
-
-        color="confidence",
-
-        orientation="h",
-
-        title="Top Bundles by Lift"
-
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-# =====================================================
-# CROSS SELL OPPORTUNITIES
-# =====================================================
-
-st.header("🔗 Cross-Selling Opportunities")
-
-if not rules.empty:
-
-    cross_sell = (
-
-        rules
-
-        .sort_values(
-            "confidence",
-            ascending=False
-        )
-
-        .head(15)
-
-    )
-
-    st.dataframe(
-
-        cross_sell[
-            [
-                "antecedents",
-                "consequents",
-                "confidence",
-                "lift"
-            ]
-        ],
-
-        use_container_width=True
-
-    )
-
-# =====================================================
-# UPSELL OPPORTUNITIES
-# =====================================================
-
-st.header("📈 Upselling Opportunities")
-
-if (
-    "Itemname" in df.columns and
-    "Price" in df.columns
-):
-
-    upsell_df = (
-
-        df.groupby("Itemname")["Price"]
-
-        .mean()
-
-        .reset_index()
-
-        .sort_values(
-            "Price",
-            ascending=False
-        )
-
-        .head(15)
-
-    )
-
-    fig = px.bar(
-
-        upsell_df,
-
-        x="Price",
-
-        y="Itemname",
-
-        orientation="h",
-
-        title="Premium Products"
-
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-# =====================================================
-# CUSTOMER SEGMENT RECOMMENDATIONS
-# =====================================================
-
-st.header("🎯 Customer Segment Recommendations")
-
-if not segments.empty:
-
-    segment_list = sorted(
-        segments["Segment_Name"].unique()
-    )
-
-    selected_segment = st.selectbox(
-
-        "Select Customer Segment",
-
-        segment_list
-
-    )
-
-    filtered_segment = segments[
-        segments["Segment_Name"]
-        == selected_segment
-    ]
-
-    st.dataframe(
-        filtered_segment.head(50),
-        use_container_width=True
-    )
-
-    recommendation_map = {
-
-        "Champions":
-        "Offer VIP rewards and loyalty programs.",
-
-        "Loyal Customers":
-        "Upsell premium products and bundles.",
-
-        "Potential Customers":
-        "Provide targeted promotions.",
-
-        "At Risk":
-        "Run retention campaigns.",
-
-        "Lost Customers":
-        "Send win-back offers."
-    }
-
-    recommendation = recommendation_map.get(
-
-        selected_segment,
-
-        "Create personalized campaigns."
-
-    )
-
-    st.success(recommendation)
-
-else:
-
-    st.warning(
-        "Customer segmentation file not found."
-    )
-
-# =====================================================
-# REVENUE OPPORTUNITIES
-# =====================================================
-
-st.header("💰 Revenue Opportunities")
-
-if (
-    "Qty" in df.columns and
-    "Price" in df.columns
-):
-
-    df["Revenue"] = (
-        df["Qty"] * df["Price"]
-    )
-
-    revenue_products = (
-
-        df.groupby("Itemname")
-
-        .agg({
-
-            "Revenue":"sum"
-
-        })
-
-        .reset_index()
-
-        .sort_values(
-            "Revenue",
-            ascending=False
-        )
-
-        .head(15)
-
-    )
-
-    fig = px.pie(
-
-        revenue_products,
-
-        names="Itemname",
-
-        values="Revenue",
-
-        hole=0.4,
-
-        title="Revenue Contribution"
-
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-# =====================================================
-# ACTIONABLE INSIGHTS
-# =====================================================
-
-st.header("📋 Actionable Business Insights")
-
-st.info(
-    """
-    1. Bundle products with high lift values.
-
-    2. Promote frequently purchased combinations.
-
-    3. Focus on high-value customer segments.
-
-    4. Re-engage at-risk customers.
-
-    5. Increase visibility of premium products.
-
-    6. Use personalized recommendations in marketing.
-
-    7. Optimize inventory for frequently purchased bundles.
-
-    8. Launch loyalty programs for repeat buyers.
-    """
-)
-
-# =====================================================
-# EXPORT RECOMMENDATIONS
-# =====================================================
-
-st.header("📥 Export Recommendations")
-
-if not rules.empty:
-
-    csv = rules.to_csv(
-        index=False
-    ).encode("utf-8")
-
-    st.download_button(
-
-        "Download Recommendations",
-
-        data=csv,
-
-        file_name="recommendations.csv",
-
-        mime="text/csv"
-
-    )
-
-# =====================================================
-# SUMMARY DASHBOARD
-# =====================================================
-
-st.header("📊 Recommendation Summary")
-
-col1, col2, col3 = st.columns(3)
-
-col1.metric(
-    "Products",
-    df["Itemname"].nunique()
-    if "Itemname" in df.columns
-    else 0
-)
-
-col2.metric(
-    "Association Rules",
-    len(rules)
-)
-
-col3.metric(
-    "Customer Segments",
-    segments["Segment_Name"].nunique()
-    if not segments.empty
-    else 0
-)
-
-st.success(
-    "Recommendation engine successfully generated insights and opportunities."
-)
+    st.dataframe(df.head(100), use_container_width=True)
