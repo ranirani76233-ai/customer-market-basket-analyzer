@@ -2,520 +2,484 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from sklearn.ensemble import RandomForestRegressor
+import plotly.graph_objects as go
 
 # ==================================================
+
 # PAGE CONFIG
+
 # ==================================================
 
 st.set_page_config(
-    page_title="Analytics",
-    page_icon="📈",
-    layout="wide"
+page_title="Advanced Retail Analytics",
+page_icon="📈",
+layout="wide"
 )
 
 st.title("📈 Advanced Retail Analytics")
+st.markdown("Deep business insights, customer intelligence, and revenue analytics")
 
 # ==================================================
+
 # LOAD DATA
+
 # ==================================================
 
 @st.cache_data
 def load_data():
 
+```
+file_path = "data/Assignment-1_Data.csv.csv"
+
+try:
     df = pd.read_csv(
-        'data/Assignment-1_Data.csv.csv'      
+        file_path,
+        sep=None,
+        engine="python",
+        on_bad_lines="skip"
     )
 
-    return df
+except Exception as e:
 
+    st.error(f"Dataset Loading Error: {e}")
+    st.stop()
+
+return df
+```
 
 df = load_data()
 
 # ==================================================
-# DATA PREPARATION
-# ==================================================
 
-if "Date" in df.columns:
-    df["Date"] = pd.to_datetime(
-        df["Date"],
-        errors="coerce"
-    )
-
-if (
-    "Qty" in df.columns and
-    "Price" in df.columns
-):
-    df["Revenue"] = (
-        df["Qty"] * df["Price"]
-    )
+# CLEAN COLUMNS
 
 # ==================================================
-# SALES ANALYTICS
-# ==================================================
 
-st.header("💰 Sales Analytics")
-
-col1, col2 = st.columns(2)
-
-with col1:
-
-    revenue_stats = pd.DataFrame({
-
-        "Metric": [
-            "Total Revenue",
-            "Average Revenue",
-            "Maximum Sale",
-            "Minimum Sale"
-        ],
-
-        "Value": [
-
-            round(df["Revenue"].sum(), 2),
-
-            round(df["Revenue"].mean(), 2),
-
-            round(df["Revenue"].max(), 2),
-
-            round(df["Revenue"].min(), 2)
-
-        ]
-    })
-
-    st.dataframe(
-        revenue_stats,
-        use_container_width=True
-    )
-
-with col2:
-
-    fig = px.histogram(
-        df,
-        x="Revenue",
-        nbins=50,
-        title="Revenue Distribution"
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
+df.columns = df.columns.str.strip()
 
 # ==================================================
-# DAILY REVENUE TREND
-# ==================================================
 
-if "Date" in df.columns:
-
-    st.subheader("📅 Daily Revenue Trend")
-
-    daily_sales = (
-
-        df.groupby(
-            df["Date"].dt.date
-        )["Revenue"]
-
-        .sum()
-
-        .reset_index()
-
-    )
-
-    fig = px.line(
-
-        daily_sales,
-
-        x="Date",
-
-        y="Revenue",
-
-        markers=True
-
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
+# AUTO DETECT COLUMNS
 
 # ==================================================
-# PRODUCT ANALYTICS
+
+qty_col = None
+price_col = None
+date_col = None
+customer_col = None
+product_col = None
+country_col = None
+bill_col = None
+
+for col in df.columns:
+
+```
+c = col.lower()
+
+if c in ["qty", "quantity"]:
+    qty_col = col
+
+elif c in ["price", "unitprice"]:
+    price_col = col
+
+elif c == "date":
+    date_col = col
+
+elif c in ["customerid", "customer_id"]:
+    customer_col = col
+
+elif c in ["itemname", "description", "product"]:
+    product_col = col
+
+elif c in ["country"]:
+    country_col = col
+
+elif c in ["billno", "invoice", "invoiceno"]:
+    bill_col = col
+```
+
 # ==================================================
 
-st.header("📦 Product Analytics")
+# PREPARE DATA
 
-product_analysis = (
+# ==================================================
 
-    df.groupby("Itemname")
+if qty_col:
+df[qty_col] = pd.to_numeric(
+df[qty_col],
+errors="coerce"
+)
 
-    .agg({
+if price_col:
+df[price_col] = pd.to_numeric(
+df[price_col],
+errors="coerce"
+)
 
-        "Qty": "sum",
+if date_col:
+df[date_col] = pd.to_datetime(
+df[date_col],
+errors="coerce"
+)
 
-        "Revenue": "sum"
+if qty_col and price_col:
 
-    })
+```
+df["Revenue"] = (
+    df[qty_col].fillna(0)
+    *
+    df[price_col].fillna(0)
+)
+```
 
+else:
+
+```
+st.error("Revenue cannot be calculated.")
+st.write("Columns Found:", list(df.columns))
+st.stop()
+```
+
+# ==================================================
+
+# KPI SECTION
+
+# ==================================================
+
+st.subheader("📊 Executive Overview")
+
+col1, col2, col3, col4 = st.columns(4)
+
+total_revenue = df["Revenue"].sum()
+
+total_orders = (
+df[bill_col].nunique()
+if bill_col else 0
+)
+
+total_customers = (
+df[customer_col].nunique()
+if customer_col else 0
+)
+
+total_products = (
+df[product_col].nunique()
+if product_col else 0
+)
+
+col1.metric(
+"Revenue",
+f"${total_revenue:,.0f}"
+)
+
+col2.metric(
+"Orders",
+f"{total_orders:,}"
+)
+
+col3.metric(
+"Customers",
+f"{total_customers:,}"
+)
+
+col4.metric(
+"Products",
+f"{total_products:,}"
+)
+
+st.divider()
+
+# ==================================================
+
+# MONTHLY REVENUE TREND
+
+# ==================================================
+
+if date_col:
+
+```
+st.subheader("📈 Monthly Revenue Trend")
+
+monthly = (
+    df.groupby(
+        df[date_col].dt.to_period("M")
+    )["Revenue"]
+    .sum()
     .reset_index()
+)
 
+monthly[date_col] = monthly[
+    date_col
+].astype(str)
+
+fig = px.line(
+    monthly,
+    x=date_col,
+    y="Revenue",
+    markers=True
+)
+
+st.plotly_chart(
+    fig,
+    use_container_width=True
+)
+```
+
+# ==================================================
+
+# REVENUE DISTRIBUTION
+
+# ==================================================
+
+st.subheader("💰 Revenue Distribution")
+
+fig = px.histogram(
+df,
+x="Revenue",
+nbins=50
+)
+
+st.plotly_chart(
+fig,
+use_container_width=True
+)
+
+# ==================================================
+
+# TOP PRODUCTS
+
+# ==================================================
+
+if product_col:
+
+```
+st.subheader("🏆 Top Revenue Products")
+
+top_products = (
+    df.groupby(product_col)["Revenue"]
+    .sum()
+    .sort_values(
+        ascending=False
+    )
+    .head(15)
+    .reset_index()
+)
+
+fig = px.bar(
+    top_products,
+    x="Revenue",
+    y=product_col,
+    orientation="h"
+)
+
+st.plotly_chart(
+    fig,
+    use_container_width=True
+)
+```
+
+# ==================================================
+
+# CUSTOMER SEGMENTATION
+
+# ==================================================
+
+if customer_col:
+
+```
+st.subheader("👥 Customer Segmentation")
+
+customer_df = (
+    df.groupby(customer_col)
+    .agg({
+        "Revenue": "sum"
+    })
+    .reset_index()
+)
+
+customer_df["Segment"] = pd.qcut(
+    customer_df["Revenue"],
+    4,
+    labels=[
+        "Bronze",
+        "Silver",
+        "Gold",
+        "Platinum"
+    ]
+)
+
+fig = px.pie(
+    customer_df,
+    names="Segment"
+)
+
+st.plotly_chart(
+    fig,
+    use_container_width=True
+)
+```
+
+# ==================================================
+
+# COUNTRY ANALYSIS
+
+# ==================================================
+
+if country_col:
+
+```
+st.subheader("🌍 Country Performance")
+
+country_df = (
+    df.groupby(country_col)
+    .agg({
+        "Revenue": "sum"
+    })
+    .reset_index()
     .sort_values(
         "Revenue",
         ascending=False
     )
-
+    .head(15)
 )
-
-top_products = product_analysis.head(15)
 
 fig = px.bar(
-
-    top_products,
-
-    x="Revenue",
-
-    y="Itemname",
-
-    orientation="h",
-
-    title="Top Revenue Products"
-
+    country_df,
+    x=country_col,
+    y="Revenue"
 )
 
 st.plotly_chart(
     fig,
     use_container_width=True
 )
+```
 
 # ==================================================
-# CUSTOMER ANALYTICS
+
+# PRODUCT PERFORMANCE TABLE
+
 # ==================================================
 
-st.header("👥 Customer Analytics")
+if product_col:
 
-customer_df = (
+```
+st.subheader("📦 Product Performance")
 
-    df.groupby("CustomerID")
-
+product_perf = (
+    df.groupby(product_col)
     .agg({
-
-        "Revenue": "sum",
-
-        "BillNo": "nunique",
-
-        "Qty": "sum"
-
+        qty_col: "sum",
+        "Revenue": "sum"
     })
-
     .reset_index()
-
-)
-
-customer_df.columns = [
-
-    "CustomerID",
-
-    "TotalSpend",
-
-    "Orders",
-
-    "ItemsPurchased"
-
-]
-
-fig = px.scatter(
-
-    customer_df,
-
-    x="Orders",
-
-    y="TotalSpend",
-
-    size="ItemsPurchased",
-
-    title="Customer Spend Analysis"
-
-)
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-# ==================================================
-# RFM ANALYSIS
-# ==================================================
-
-st.header("🎯 RFM Analysis")
-
-if "Date" in df.columns:
-
-    snapshot_date = df["Date"].max()
-
-    rfm = (
-
-        df.groupby("CustomerID")
-
-        .agg({
-
-            "Date": lambda x:
-            (snapshot_date - x.max()).days,
-
-            "BillNo": "nunique",
-
-            "Revenue": "sum"
-
-        })
-
-        .reset_index()
-
-    )
-
-    rfm.columns = [
-
-        "CustomerID",
-
-        "Recency",
-
-        "Frequency",
-
-        "Monetary"
-
-    ]
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric(
-            "Avg Recency",
-            round(rfm["Recency"].mean(), 1)
-        )
-
-    with col2:
-        st.metric(
-            "Avg Frequency",
-            round(rfm["Frequency"].mean(), 1)
-        )
-
-    with col3:
-        st.metric(
-            "Avg Monetary",
-            round(rfm["Monetary"].mean(), 2)
-        )
-
-    fig = px.scatter(
-
-        rfm,
-
-        x="Frequency",
-
-        y="Monetary",
-
-        color="Recency",
-
-        title="RFM Customer Distribution"
-
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-# ==================================================
-# TOP CUSTOMERS
-# ==================================================
-
-st.header("🏆 Top Customers")
-
-top_customers = (
-
-    customer_df
-
     .sort_values(
-        "TotalSpend",
+        "Revenue",
         ascending=False
     )
-
-    .head(20)
-
+    .head(25)
 )
 
 st.dataframe(
-    top_customers,
+    product_perf,
     use_container_width=True
 )
+```
 
 # ==================================================
-# COUNTRY ANALYSIS
-# ==================================================
 
-if "Country" in df.columns:
-
-    st.header("🌍 Country Analysis")
-
-    country_sales = (
-
-        df.groupby("Country")
-
-        .agg({
-
-            "Revenue": "sum"
-
-        })
-
-        .reset_index()
-
-        .sort_values(
-            "Revenue",
-            ascending=False
-        )
-
-        .head(20)
-
-    )
-
-    fig = px.bar(
-
-        country_sales,
-
-        x="Country",
-
-        y="Revenue",
-
-        title="Revenue by Country"
-
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-# ==================================================
-# ROOT CAUSE ANALYSIS
-# ==================================================
-
-st.header("🔍 Revenue Driver Analysis")
-
-features = ["Qty", "Price"]
-
-if all(
-    col in df.columns
-    for col in features
-):
-
-    X = df[features]
-
-    y = df["Revenue"]
-
-    model = RandomForestRegressor(
-        random_state=42
-    )
-
-    model.fit(X, y)
-
-    importance = pd.DataFrame({
-
-        "Feature":
-        features,
-
-        "Importance":
-        model.feature_importances_
-
-    })
-
-    importance = importance.sort_values(
-        "Importance",
-        ascending=False
-    )
-
-    fig = px.bar(
-
-        importance,
-
-        x="Importance",
-
-        y="Feature",
-
-        orientation="h",
-
-        title="Revenue Key Drivers"
-
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-# ==================================================
 # CORRELATION MATRIX
+
 # ==================================================
 
-st.header("🔥 Correlation Analysis")
+st.subheader("🔥 Correlation Analysis")
 
 numeric_df = df.select_dtypes(
-    include=np.number
+include=np.number
 )
 
 if len(numeric_df.columns) > 1:
 
-    corr = numeric_df.corr()
+```
+corr = numeric_df.corr()
 
-    fig = px.imshow(
+fig = px.imshow(
+    corr,
+    text_auto=True,
+    aspect="auto"
+)
 
-        corr,
-
-        text_auto=True,
-
-        aspect="auto",
-
-        title="Correlation Heatmap"
-
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
+st.plotly_chart(
+    fig,
+    use_container_width=True
+)
+```
 
 # ==================================================
-# BUSINESS INSIGHTS
+
+# SALES INSIGHTS
+
 # ==================================================
 
-st.header("💡 Business Recommendations")
+st.subheader("💡 AI Business Insights")
+
+best_product = ""
+
+if product_col:
+
+```
+best_product = (
+    df.groupby(product_col)["Revenue"]
+    .sum()
+    .idxmax()
+)
+```
 
 st.success(
-    """
-    1. Focus promotions on high-revenue products.
+f"""
+• Total Revenue: ${total_revenue:,.0f}
 
-    2. Retain high-value customers identified through RFM analysis.
+```
+• Top Product: {best_product}
 
-    3. Bundle products frequently purchased together.
+• Unique Customers: {total_customers:,}
 
-    4. Target countries contributing the highest revenue.
+• Total Orders: {total_orders:,}
 
-    5. Improve repeat purchases through loyalty campaigns.
-    """
+• Product Portfolio: {total_products:,}
+"""
+```
+
 )
 
 # ==================================================
-# EXPORT ANALYTICS
+
+# RAW DATA
+
 # ==================================================
 
-st.header("📥 Download Analytics")
+with st.expander("View Dataset"):
 
-csv = customer_df.to_csv(
-    index=False
+```
+st.dataframe(
+    df.head(100),
+    use_container_width=True
+)
+```
+
+# ==================================================
+
+# DOWNLOAD
+
+# ==================================================
+
+csv = df.to_csv(
+index=False
 ).encode("utf-8")
 
 st.download_button(
-
-    label="Download Customer Analytics",
-
-    data=csv,
-
-    file_name="customer_analytics.csv",
-
-    mime="text/csv"
+"⬇ Download Dataset",
+csv,
+"advanced_retail_analytics.csv",
+"text/csv"
 )
