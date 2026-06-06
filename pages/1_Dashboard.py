@@ -28,7 +28,7 @@ st.title("📊 Retail Analytics Dashboard")
 def load_data():
 
     df = pd.read_csv(
-        'data/Assignment-1_Data.csv.csv'
+        'data/Assignment-1_Data.csv.csv',sep=";"
         
     )
 
