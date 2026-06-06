@@ -1,1 +1,9 @@
+from mlxtend.frequent_patterns import apriori, association_rules
+import joblib
 
+rules = association_rules(frequent_itemsets,
+                          metric="lift",
+                          min_threshold=1)
+
+joblib.dump(rules, "models/association_rules.pkl")
+rules = joblib.load("models/association_rules.pkl")
