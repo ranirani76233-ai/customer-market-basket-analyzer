@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from mlxtend.frequent_patterns import apriori, fpgrowth, association_rules
+from mlxtend.frequent_patterns import apriori
 
 # ==================================================
 # CONFIG
@@ -14,7 +14,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🛒 Market Basket Analysis (Robust Version)")
+st.title("🛒 Market Basket Analysis (Smart Hybrid)")
 
 # ==================================================
 # LOAD DATA
@@ -35,14 +35,14 @@ def load_data():
 df = load_data()
 
 if df.empty:
-    st.error("Dataset not loaded")
+    st.error("Dataset not found")
     st.stop()
 
-# ==================================================
-# CLEAN
-# ==================================================
-
 df.columns = df.columns.str.strip()
+
+# ==================================================
+# DETECT COLUMNS
+# ==================================================
 
 invoice_col = None
 product_col = None
@@ -57,28 +57,39 @@ for col in df.columns:
         product_col = col
 
 if not invoice_col or not product_col:
-    st.error(f"Missing columns: {df.columns.tolist()}")
+    st.error(f"Missing required columns: {df.columns.tolist()}")
     st.stop()
+
+# ==================================================
+# CLEAN DATA
+# ==================================================
 
 df = df[[invoice_col, product_col]].dropna()
 df = df.drop_duplicates()
 
-# ==================================================
-# LIMIT DATA (CRITICAL FOR STABILITY)
-# ==================================================
-
-if len(df) > 25000:
-    df = df.sample(25000, random_state=42)
+# LIMIT SIZE FOR SPEED
+if len(df) > 20000:
+    df = df.sample(20000, random_state=42)
 
 # ==================================================
-# KEEP TOP PRODUCTS
+# TOP PRODUCTS (ALWAYS WORKS BASELINE)
 # ==================================================
 
-top_products = df[product_col].value_counts().head(40).index
-df = df[df[product_col].isin(top_products)]
+st.subheader("🔥 Top Products (Popularity Based)")
+
+top_products = (
+    df[product_col]
+    .value_counts()
+    .head(10)
+    .reset_index()
+)
+
+top_products.columns = ["Product", "Count"]
+
+st.dataframe(top_products, use_container_width=True)
 
 # ==================================================
-# BASKET CREATION
+# BASKET MATRIX
 # ==================================================
 
 basket = (
@@ -89,138 +100,79 @@ basket = (
 
 basket = basket.apply(lambda x: (x > 0).astype(int))
 
-if basket.shape[1] < 2:
-    st.error("Not enough product variety for analysis")
-    st.stop()
-
 # ==================================================
-# SIDEBAR
+# SIMPLE CO-OCCURRENCE MATRIX (FALLBACK ENGINE)
 # ==================================================
 
-st.sidebar.header("Settings")
+co_matrix = basket.T.dot(basket)
 
-min_support = st.sidebar.slider("Min Support", 0.001, 0.05, 0.005)
-min_confidence = st.sidebar.slider("Min Confidence", 0.1, 1.0, 0.2)
+np.fill_diagonal(co_matrix.values, 0)
+
+co_df = pd.DataFrame(co_matrix)
 
 # ==================================================
-# FREQUENT ITEMSETS (APRIORI + FALLBACK)
+# PRODUCT SELECTOR
 # ==================================================
 
-st.subheader("📦 Frequent Itemsets")
+st.subheader("🎯 Product Recommendations")
 
-frequent_itemsets = apriori(
-    basket,
-    min_support=min_support,
-    use_colnames=True
+selected_product = st.selectbox("Choose a product", co_df.columns)
+
+# ==================================================
+# RECOMMENDATIONS (ALWAYS WORKS)
+# ==================================================
+
+recommendations = (
+    co_df[selected_product]
+    .sort_values(ascending=False)
+    .head(10)
+    .reset_index()
 )
 
-# fallback if apriori fails
-if frequent_itemsets.empty:
-    st.warning("Apriori failed → switching to FP-Growth")
-    frequent_itemsets = fpgrowth(
-        basket,
-        min_support=min_support,
-        use_colnames=True
+recommendations.columns = ["Product", "Score"]
+
+st.dataframe(recommendations, use_container_width=True)
+
+# ==================================================
+# FREQUENT PAIRS (OPTIONAL INSIGHT)
+# ==================================================
+
+st.subheader("📦 Frequently Bought Together")
+
+pairs = []
+
+cols = list(co_df.columns)
+
+for i in range(len(cols)):
+    for j in range(i + 1, len(cols)):
+
+        score = co_df.loc[cols[i], cols[j]]
+
+        if score > 0:
+            pairs.append((cols[i], cols[j], score))
+
+pairs_df = pd.DataFrame(pairs, columns=["Product 1", "Product 2", "Score"])
+
+if not pairs_df.empty:
+    st.dataframe(
+        pairs_df.sort_values("Score", ascending=False).head(15),
+        use_container_width=True
     )
-
-if frequent_itemsets.empty:
-    st.error("No patterns found even with FP-Growth. Data too sparse.")
-    st.stop()
-
-st.dataframe(
-    frequent_itemsets.sort_values("support", ascending=False).head(20),
-    use_container_width=True
-)
+else:
+    st.info("No strong product pairs found, showing popularity-based insights instead.")
 
 # ==================================================
-# RULES GENERATION (ROBUST FIX)
+# INSIGHT (ALWAYS SHOWS)
 # ==================================================
 
-st.subheader("🔗 Association Rules")
+top_pair = pairs_df.iloc[0] if not pairs_df.empty else None
 
-rules = association_rules(
-    frequent_itemsets,
-    metric="lift",
-    min_threshold=1
-)
+st.subheader("💡 Insight")
 
-# fallback relaxation
-if rules.empty:
-
-    rules = association_rules(
-        frequent_itemsets,
-        metric="confidence",
-        min_threshold=0.1
-    )
-
-# final fallback
-if rules.empty:
-
-    st.warning("Weak dataset → generating minimal rules")
-
-    rules = association_rules(
-        frequent_itemsets,
-        metric="support",
-        min_threshold=0.001
-    )
-
-# ==================================================
-# FINAL CHECK (NEVER FAILS NOW)
-# ==================================================
-
-if rules.empty:
-    st.error("No rules can be generated from this dataset.")
-    st.stop()
-
-rules = rules.sort_values("lift", ascending=False)
-
-# ==================================================
-# DISPLAY RULES
-# ==================================================
-
-st.dataframe(
-    rules[[
-        "antecedents",
-        "consequents",
-        "support",
-        "confidence",
-        "lift"
-    ]].head(20),
-    use_container_width=True
-)
-
-# ==================================================
-# VISUALIZATION
-# ==================================================
-
-st.subheader("📊 Insights")
-
-st.scatter_chart(
-    rules[["confidence", "lift"]].head(200)
-)
-
-# ==================================================
-# TOP INSIGHT
-# ==================================================
-
-top_rule = rules.iloc[0]
-
-st.success(f"""
-Top Insight:
-
-If customers buy:
-{top_rule['antecedents']}
-
-They also buy:
-{top_rule['consequents']}
-
-Confidence: {top_rule['confidence']:.2f}
-Lift: {top_rule['lift']:.2f}
+if top_pair is not None:
+    st.success(f"""
+Customers who buy **{top_pair['Product 1']}**
+also buy **{top_pair['Product 2']}**
 """)
-
-# ==================================================
-# DATA VIEW
-# ==================================================
-
-with st.expander("View Data"):
-    st.dataframe(df.head(100), use_container_width=True)
+else:
+    st.info("Dataset shows weak co-occurrence. Recommendations are based on popularity model.")
