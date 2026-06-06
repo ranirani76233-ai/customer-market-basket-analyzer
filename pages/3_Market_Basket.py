@@ -22,7 +22,6 @@ st.title("🛒 Market Basket Analysis")
 
 @st.cache_data
 def load_data():
-
     try:
         df = pd.read_csv(
             "data/Assignment-1_Data.csv.csv",
@@ -31,15 +30,14 @@ def load_data():
             on_bad_lines="skip"
         )
         return df
-
     except Exception as e:
-        st.error(f"Error loading dataset: {e}")
+        st.error(f"Dataset loading error: {e}")
         return pd.DataFrame()
 
 df = load_data()
 
 if df.empty:
-    st.error("Dataset is empty or not found.")
+    st.error("Dataset not loaded")
     st.stop()
 
 # ==================================================
@@ -56,7 +54,6 @@ invoice_col = None
 product_col = None
 
 for col in df.columns:
-
     c = col.lower()
 
     if c in ["billno", "invoice", "invoiceno", "invoice_no"]:
@@ -65,18 +62,14 @@ for col in df.columns:
     if c in ["itemname", "product", "description", "stockcode"]:
         product_col = col
 
-# ==================================================
-# VALIDATION
-# ==================================================
-
 if not invoice_col or not product_col:
     st.error(f"""
     Required columns not found!
 
-    Invoice Column: {invoice_col}
-    Product Column: {product_col}
+    Invoice: {invoice_col}
+    Product: {product_col}
 
-    Available Columns:
+    Columns Available:
     {df.columns.tolist()}
     """)
     st.stop()
@@ -88,19 +81,24 @@ if not invoice_col or not product_col:
 df = df[[invoice_col, product_col]].dropna()
 df = df.drop_duplicates()
 
-# LIMIT DATA (PREVENT CRASH)
-if len(df) > 30000:
-    df = df.sample(30000, random_state=42)
-
 # ==================================================
-# CREATE BASKET MATRIX
+# FILTER TOP PRODUCTS (VERY IMPORTANT FIX)
 # ==================================================
 
-basket = (
-    df.groupby([invoice_col, product_col])
-    .size()
-    .unstack(fill_value=0)
+top_products = (
+    df[product_col]
+    .value_counts()
+    .head(50)
+    .index
 )
+
+df = df[df[product_col].isin(top_products)]
+
+# ==================================================
+# CREATE BASKET
+# ==================================================
+
+basket = df.groupby([invoice_col, product_col]).size().unstack(fill_value=0)
 
 basket = basket.apply(lambda x: (x > 0).astype(int))
 
@@ -109,17 +107,24 @@ basket = basket.apply(lambda x: (x > 0).astype(int))
 # ==================================================
 
 if basket.shape[1] < 2:
-    st.error("Not enough products for Market Basket Analysis")
+    st.error("Not enough product variety for analysis")
     st.stop()
 
 # ==================================================
-# SIDEBAR SETTINGS
+# SIDEBAR SETTINGS (FIXED LOW RANGE)
 # ==================================================
 
 st.sidebar.header("Settings")
 
-min_support = st.sidebar.slider("Min Support", 0.01, 0.2, 0.02)
-min_confidence = st.sidebar.slider("Min Confidence", 0.1, 1.0, 0.3)
+min_support = st.sidebar.slider(
+    "Min Support",
+    0.001, 0.1, 0.005
+)
+
+min_confidence = st.sidebar.slider(
+    "Min Confidence",
+    0.1, 1.0, 0.3
+)
 
 # ==================================================
 # FREQUENT ITEMSETS
@@ -134,7 +139,7 @@ frequent_itemsets = apriori(
 )
 
 if frequent_itemsets.empty:
-    st.warning("No frequent itemsets found. Try lowering support.")
+    st.warning("No itemsets found. Try lowering support.")
     st.stop()
 
 st.dataframe(
@@ -143,7 +148,7 @@ st.dataframe(
 )
 
 # ==================================================
-# ASSOCIATION RULES (SAFE FIX)
+# ASSOCIATION RULES (SAFE)
 # ==================================================
 
 st.subheader("🔗 Association Rules")
@@ -155,16 +160,12 @@ try:
         min_threshold=min_confidence
     )
 except Exception as e:
-    st.error(f"Rules generation failed: {e}")
+    st.error(f"Rules generation error: {e}")
     st.stop()
 
 if rules.empty:
-    st.warning("No association rules found. Try lowering thresholds.")
+    st.warning("No rules found. Try lowering confidence/support.")
     st.stop()
-
-# ==================================================
-# CLEAN RULES
-# ==================================================
 
 rules = rules.sort_values("lift", ascending=False)
 
@@ -183,29 +184,29 @@ st.dataframe(
 # VISUALIZATION
 # ==================================================
 
-st.subheader("📊 Lift vs Confidence")
+st.subheader("📊 Confidence vs Lift")
 
 st.scatter_chart(
     rules[["confidence", "lift"]].head(200)
 )
 
 # ==================================================
-# INSIGHTS
+# INSIGHT
 # ==================================================
 
-best_rule = rules.iloc[0]
+top_rule = rules.iloc[0]
 
 st.success(f"""
 Top Insight:
 
 If customers buy:
-{best_rule['antecedents']}
+{top_rule['antecedents']}
 
 They also buy:
-{best_rule['consequents']}
+{top_rule['consequents']}
 
-Confidence: {best_rule['confidence']:.2f}
-Lift: {best_rule['lift']:.2f}
+Confidence: {top_rule['confidence']:.2f}
+Lift: {top_rule['lift']:.2f}
 """)
 
 # ==================================================
