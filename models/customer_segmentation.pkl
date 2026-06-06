@@ -1,1 +1,8 @@
+from sklearn.cluster import KMeans
+import joblib
 
+kmeans = KMeans(n_clusters=4)
+kmeans.fit(X)
+
+joblib.dump(kmeans, "models/customer_segmentation.pkl")
+segment_model = joblib.load("models/customer_segmentation.pkl")
