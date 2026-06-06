@@ -28,8 +28,8 @@ st.title("📊 Retail Analytics Dashboard")
 def load_data():
 
     df = pd.read_csv(
-        "data/Assignment-1_Data.csv",
-        encoding="ISO-8859-1"
+        'data/Assignment-1_Data.csv'
+        
     )
 
     return df
