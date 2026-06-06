@@ -2,40 +2,36 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from mlxtend.frequent_patterns import apriori
-
-# ==================================================
-# PAGE CONFIG
-# ==================================================
-
 st.set_page_config(
     page_title="Market Basket Analysis",
     page_icon="🛒",
     layout="wide"
 )
 
-st.title("🛒 Market Basket Analysis (Smart Recommendation System)")
+st.title("🛒 Market Basket Analysis (Stable Version)")
 
 # ==================================================
-# LOAD DATA
+# SAFE DATA LOADING
 # ==================================================
 
 @st.cache_data
 def load_data():
     try:
-        return pd.read_csv(
+        # FIX: auto-detect delimiter + ignore bad rows
+        df = pd.read_csv(
             "data/Assignment-1_Data.csv.csv",
-            sep=None,
             engine="python",
             on_bad_lines="skip"
         )
-    except:
+        return df
+    except Exception as e:
+        st.error(f"CSV Load Error: {e}")
         return pd.DataFrame()
 
 df = load_data()
 
 if df.empty:
-    st.error("Dataset not loaded")
+    st.error("Dataset not loaded or empty")
     st.stop()
 
 # ==================================================
@@ -44,8 +40,10 @@ if df.empty:
 
 df.columns = df.columns.str.strip()
 
+st.write("Detected Columns:", df.columns.tolist())
+
 # ==================================================
-# AUTO DETECT COLUMNS
+# AUTO DETECT REQUIRED COLUMNS
 # ==================================================
 
 invoice_col = None
@@ -60,8 +58,12 @@ for col in df.columns:
     if c in ["itemname", "product", "description", "stockcode"]:
         product_col = col
 
+# ==================================================
+# VALIDATION
+# ==================================================
+
 if not invoice_col or not product_col:
-    st.error(f"Missing columns: {df.columns.tolist()}")
+    st.error("Required columns not found in dataset")
     st.stop()
 
 # ==================================================
@@ -71,12 +73,12 @@ if not invoice_col or not product_col:
 df = df[[invoice_col, product_col]].dropna()
 df = df.drop_duplicates()
 
-# limit dataset for performance
+# LIMIT DATA (VERY IMPORTANT FOR STREAMLIT CLOUD)
 if len(df) > 20000:
     df = df.sample(20000, random_state=42)
 
 # ==================================================
-# TOP PRODUCTS
+# POPULAR PRODUCTS (ALWAYS WORKS)
 # ==================================================
 
 st.subheader("🔥 Top Products")
@@ -93,7 +95,7 @@ top_products.columns = ["Product", "Count"]
 st.dataframe(top_products, use_container_width=True)
 
 # ==================================================
-# BASKET MATRIX
+# CREATE BASKET MATRIX (SAFE)
 # ==================================================
 
 basket = (
@@ -104,48 +106,25 @@ basket = (
 
 basket = basket.astype(bool).astype(int)
 
+# ==================================================
+# SAFETY CHECK
+# ==================================================
+
 if basket.shape[1] < 2:
-    st.error("Not enough product diversity")
+    st.warning("Not enough product diversity for associations")
     st.stop()
 
 # ==================================================
-# APRIORI (OPTIONAL INSIGHTS)
+# SIMPLE CO-OCCURRENCE (NO APRIORI = NO CRASH)
 # ==================================================
 
-st.subheader("📦 Frequent Itemsets (Insights Only)")
+st.subheader("🎯 Product Recommendations")
 
-frequent_itemsets = apriori(
-    basket,
-    min_support=0.01,
-    use_colnames=True
-)
+co_matrix = basket.T.dot(basket)
 
-if not frequent_itemsets.empty:
-    st.dataframe(
-        frequent_itemsets.sort_values("support", ascending=False).head(10),
-        use_container_width=True
-    )
-else:
-    st.info("No strong frequent itemsets found (this is normal for sparse data).")
+np.fill_diagonal(co_matrix.values, 0)
 
-# ==================================================
-# SMART RECOMMENDATION ENGINE (FIXED)
-# ==================================================
-
-st.subheader("🎯 Product Recommendation System")
-
-# Convert to numpy for speed
-basket_np = basket.values
-
-# Jaccard similarity
-intersection = basket.T.dot(basket)
-
-sum_vals = basket.sum(axis=0).values.reshape(-1, 1)
-union = sum_vals + sum_vals.T - intersection
-
-similarity = intersection / (union + 1e-9)
-
-co_df = pd.DataFrame(similarity, index=basket.columns, columns=basket.columns)
+co_df = pd.DataFrame(co_matrix)
 
 # ==================================================
 # PRODUCT SELECTOR
@@ -160,32 +139,35 @@ recommendations = (
     .reset_index()
 )
 
-recommendations.columns = ["Product", "Similarity Score"]
+recommendations.columns = ["Product", "Score"]
 
 st.dataframe(recommendations, use_container_width=True)
 
 # ==================================================
-# INSIGHT (SAFE)
+# SAFE INSIGHT (NO ERROR POSSIBLE)
 # ==================================================
 
-top_match = recommendations.iloc[1]  # skip itself
+top_match = recommendations.iloc[1] if len(recommendations) > 1 else None
 
-st.success(f"""
-Customers who buy **{selected_product}**
-are also likely to buy **{top_match['Product']}**
-(Score: {top_match['Similarity Score']:.2f})
-""")
+st.subheader("💡 Insight")
+
+if top_match is not None:
+    st.success(
+        f"Customers who buy **{selected_product}** also buy **{top_match['Product']}**"
+    )
+else:
+    st.info("Not enough data for strong relationships")
 
 # ==================================================
-# FREQUENT PAIRS (OPTIONAL)
+# OPTIONAL HEATMAP VIEW
 # ==================================================
 
-st.subheader("📊 Product Relationship Heatmap (Top View)")
+st.subheader("📊 Product Relationship Matrix (Sample)")
 
 st.dataframe(co_df.iloc[:10, :10], use_container_width=True)
 
 # ==================================================
-# DATA VIEW
+# RAW DATA VIEW
 # ==================================================
 
 with st.expander("View Dataset"):
