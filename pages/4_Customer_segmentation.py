@@ -18,7 +18,7 @@ st.set_page_config(
 st.title("👥 Customer Segmentation Dashboard")
 
 # ==================================================
-# LOAD DATA (SAFE)
+# LOAD DATA
 # ==================================================
 
 @st.cache_data
@@ -41,7 +41,7 @@ def load_data():
 df = load_data()
 
 if df.empty:
-    st.error("Dataset is empty or failed to load.")
+    st.error("Dataset is empty")
     st.stop()
 
 # ==================================================
@@ -49,8 +49,6 @@ if df.empty:
 # ==================================================
 
 df.columns = df.columns.str.strip()
-
-st.write("Detected Columns:", df.columns.tolist())
 
 # ==================================================
 # AUTO DETECT COLUMNS
@@ -81,22 +79,12 @@ for col in df.columns:
     elif c in ["billno", "invoice", "invoiceno"]:
         invoice_col = col
 
-# ==================================================
-# VALIDATION
-# ==================================================
-
 if customer_col is None:
-
-    st.error(f"""
-    Customer column not found!
-
-    Available Columns:
-    {df.columns.tolist()}
-    """)
+    st.error("Customer column not found")
     st.stop()
 
 # ==================================================
-# CONVERT DATA TYPES
+# CONVERT TYPES
 # ==================================================
 
 if qty_col:
@@ -113,16 +101,18 @@ if date_col:
 # ==================================================
 
 if qty_col and price_col:
-
-    df["Revenue"] = (
-        df[qty_col].fillna(0) *
-        df[price_col].fillna(0)
-    )
-
+    df["Revenue"] = df[qty_col] * df[price_col]
 else:
-
-    st.error("Revenue cannot be created (Qty/Price missing)")
+    st.error("Missing Qty/Price columns")
     st.stop()
+
+# ==================================================
+# DROP BAD ROWS (IMPORTANT FIX 🔥)
+# ==================================================
+
+df = df.dropna(subset=["Revenue", customer_col])
+
+df = df[df["Revenue"] >= 0]
 
 # ==================================================
 # RFM ANALYSIS
@@ -131,6 +121,8 @@ else:
 st.subheader("📊 RFM Analysis")
 
 if date_col:
+
+    df = df.dropna(subset=[date_col])
 
     snapshot_date = df[date_col].max() + pd.Timedelta(days=1)
 
@@ -142,12 +134,7 @@ if date_col:
 
     }).reset_index()
 
-    rfm.columns = [
-        "CustomerID",
-        "Recency",
-        "Frequency",
-        "Monetary"
-    ]
+    rfm.columns = ["CustomerID", "Recency", "Frequency", "Monetary"]
 
 else:
 
@@ -157,9 +144,20 @@ else:
 
     }).reset_index()
 
+    rfm.columns = ["CustomerID", "Monetary"]
+
     rfm["Recency"] = 0
     rfm["Frequency"] = 1
-    rfm.rename(columns={"Revenue": "Monetary"}, inplace=True)
+
+# ==================================================
+# 🚨 FINAL CLEANING (FIX FOR KMEANS ERROR)
+# ==================================================
+
+rfm["Recency"] = rfm["Recency"].fillna(rfm["Recency"].median())
+rfm["Frequency"] = rfm["Frequency"].fillna(1)
+rfm["Monetary"] = rfm["Monetary"].fillna(0)
+
+rfm = rfm.replace([np.inf, -np.inf], np.nan).dropna()
 
 # ==================================================
 # KPIs
@@ -175,17 +173,14 @@ col3.metric("Max Spend", f"${rfm['Monetary'].max():,.0f}")
 # CLUSTERING
 # ==================================================
 
-st.subheader("🤖 Customer Segmentation (KMeans)")
+st.subheader("🤖 KMeans Segmentation")
 
 features = rfm[["Recency", "Frequency", "Monetary"]]
 
 scaler = StandardScaler()
 scaled = scaler.fit_transform(features)
 
-n_clusters = st.sidebar.slider(
-    "Number of Segments",
-    2, 10, 4
-)
+n_clusters = st.sidebar.slider("Clusters", 2, 10, 4)
 
 model = KMeans(
     n_clusters=n_clusters,
@@ -199,66 +194,38 @@ rfm["Cluster"] = model.fit_predict(scaled)
 # CLUSTER SUMMARY
 # ==================================================
 
-cluster_summary = rfm.groupby("Cluster").agg({
-
-    "Recency": "mean",
-    "Frequency": "mean",
-    "Monetary": "mean"
-
-}).round(2)
-
-st.dataframe(cluster_summary, use_container_width=True)
+st.dataframe(
+    rfm.groupby("Cluster")[["Recency", "Frequency", "Monetary"]].mean(),
+    use_container_width=True
+)
 
 # ==================================================
-# SEGMENT DISTRIBUTION
+# VISUALS
 # ==================================================
 
 st.subheader("📈 Segment Distribution")
 
-fig = px.pie(rfm, names="Cluster")
-st.plotly_chart(fig, use_container_width=True)
-
-# ==================================================
-# CUSTOMER VALUE MAP
-# ==================================================
+st.plotly_chart(px.pie(rfm, names="Cluster"), use_container_width=True)
 
 st.subheader("💰 Customer Value Map")
 
-fig = px.scatter(
-    rfm,
-    x="Frequency",
-    y="Monetary",
-    color="Cluster",
-    size="Monetary",
-    hover_data=["CustomerID"]
+st.plotly_chart(
+    px.scatter(
+        rfm,
+        x="Frequency",
+        y="Monetary",
+        color="Cluster",
+        size="Monetary"
+    ),
+    use_container_width=True
 )
-
-st.plotly_chart(fig, use_container_width=True)
-
-# ==================================================
-# RECENCY ANALYSIS
-# ==================================================
 
 st.subheader("⏰ Recency Analysis")
 
-fig = px.box(
-    rfm,
-    x="Cluster",
-    y="Recency",
-    color="Cluster"
+st.plotly_chart(
+    px.box(rfm, x="Cluster", y="Recency", color="Cluster"),
+    use_container_width=True
 )
-
-st.plotly_chart(fig, use_container_width=True)
-
-# ==================================================
-# TOP CUSTOMERS
-# ==================================================
-
-st.subheader("🏆 Top Customers")
-
-top_customers = rfm.sort_values("Monetary", ascending=False).head(20)
-
-st.dataframe(top_customers, use_container_width=True)
 
 # ==================================================
 # INSIGHTS
@@ -268,8 +235,5 @@ best_cluster = rfm.groupby("Cluster")["Monetary"].mean().idxmax()
 
 st.success(f"""
 Best Customer Segment: Cluster {best_cluster}
-
 Total Customers: {len(rfm)}
-
-Average Revenue: ${rfm['Monetary'].mean():,.2f}
 """)
