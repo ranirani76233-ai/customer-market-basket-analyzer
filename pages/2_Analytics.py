@@ -24,7 +24,7 @@ st.title("📈 Advanced Retail Analytics")
 def load_data():
 
     df = pd.read_csv(
-        'data/Assignment-1_Data.csv'      
+        'data/Assignment-1_Data.csv.csv'      
     )
 
     return df
