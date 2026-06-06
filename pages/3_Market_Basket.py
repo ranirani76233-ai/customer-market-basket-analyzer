@@ -5,7 +5,7 @@ import numpy as np
 from mlxtend.frequent_patterns import apriori, association_rules
 
 # ==================================================
-# PAGE CONFIG
+# CONFIG
 # ==================================================
 
 st.set_page_config(
@@ -17,7 +17,7 @@ st.set_page_config(
 st.title("🛒 Market Basket Analysis")
 
 # ==================================================
-# LOAD DATA
+# LOAD DATA (ULTRA SAFE)
 # ==================================================
 
 @st.cache_data
@@ -30,14 +30,13 @@ def load_data():
             on_bad_lines="skip"
         )
         return df
-    except Exception as e:
-        st.error(f"Dataset loading error: {e}")
+    except:
         return pd.DataFrame()
 
 df = load_data()
 
-if df.empty:
-    st.error("Dataset not loaded")
+if df is None or df.empty:
+    st.error("Dataset not found or empty.")
     st.stop()
 
 # ==================================================
@@ -47,7 +46,7 @@ if df.empty:
 df.columns = df.columns.str.strip()
 
 # ==================================================
-# AUTO DETECT COLUMNS
+# FIND COLUMNS SAFELY
 # ==================================================
 
 invoice_col = None
@@ -63,15 +62,7 @@ for col in df.columns:
         product_col = col
 
 if not invoice_col or not product_col:
-    st.error(f"""
-    Required columns not found!
-
-    Invoice: {invoice_col}
-    Product: {product_col}
-
-    Columns Available:
-    {df.columns.tolist()}
-    """)
+    st.error(f"Missing columns:\n{df.columns.tolist()}")
     st.stop()
 
 # ==================================================
@@ -81,24 +72,26 @@ if not invoice_col or not product_col:
 df = df[[invoice_col, product_col]].dropna()
 df = df.drop_duplicates()
 
+# LIMIT DATA (VERY IMPORTANT FIX)
+if len(df) > 25000:
+    df = df.sample(25000, random_state=42)
+
 # ==================================================
-# FILTER TOP PRODUCTS (VERY IMPORTANT FIX)
+# KEEP TOP PRODUCTS ONLY (CRITICAL FIX)
 # ==================================================
 
-top_products = (
-    df[product_col]
-    .value_counts()
-    .head(50)
-    .index
-)
-
+top_products = df[product_col].value_counts().head(40).index
 df = df[df[product_col].isin(top_products)]
 
 # ==================================================
 # CREATE BASKET
 # ==================================================
 
-basket = df.groupby([invoice_col, product_col]).size().unstack(fill_value=0)
+basket = (
+    df.groupby([invoice_col, product_col])
+    .size()
+    .unstack(fill_value=0)
+)
 
 basket = basket.apply(lambda x: (x > 0).astype(int))
 
@@ -107,24 +100,17 @@ basket = basket.apply(lambda x: (x > 0).astype(int))
 # ==================================================
 
 if basket.shape[1] < 2:
-    st.error("Not enough product variety for analysis")
+    st.error("Not enough product combinations for analysis.")
     st.stop()
 
 # ==================================================
-# SIDEBAR SETTINGS (FIXED LOW RANGE)
+# SIDEBAR SETTINGS (SAFE RANGE)
 # ==================================================
 
 st.sidebar.header("Settings")
 
-min_support = st.sidebar.slider(
-    "Min Support",
-    0.001, 0.1, 0.005
-)
-
-min_confidence = st.sidebar.slider(
-    "Min Confidence",
-    0.1, 1.0, 0.3
-)
+min_support = st.sidebar.slider("Min Support", 0.001, 0.05, 0.01)
+min_confidence = st.sidebar.slider("Min Confidence", 0.1, 1.0, 0.3)
 
 # ==================================================
 # FREQUENT ITEMSETS
@@ -139,7 +125,7 @@ frequent_itemsets = apriori(
 )
 
 if frequent_itemsets.empty:
-    st.warning("No itemsets found. Try lowering support.")
+    st.warning("No frequent itemsets found. Lower support.")
     st.stop()
 
 st.dataframe(
@@ -148,7 +134,7 @@ st.dataframe(
 )
 
 # ==================================================
-# ASSOCIATION RULES (SAFE)
+# ASSOCIATION RULES (SAFE + PROTECTED)
 # ==================================================
 
 st.subheader("🔗 Association Rules")
@@ -159,12 +145,12 @@ try:
         metric="confidence",
         min_threshold=min_confidence
     )
-except Exception as e:
-    st.error(f"Rules generation error: {e}")
+except:
+    st.error("Could not generate rules. Try lowering support/confidence.")
     st.stop()
 
 if rules.empty:
-    st.warning("No rules found. Try lowering confidence/support.")
+    st.warning("No association rules found. Try reducing thresholds.")
     st.stop()
 
 rules = rules.sort_values("lift", ascending=False)
@@ -181,10 +167,10 @@ st.dataframe(
 )
 
 # ==================================================
-# VISUALIZATION
+# VISUAL
 # ==================================================
 
-st.subheader("📊 Confidence vs Lift")
+st.subheader("📊 Relationship Chart")
 
 st.scatter_chart(
     rules[["confidence", "lift"]].head(200)
@@ -210,8 +196,8 @@ Lift: {top_rule['lift']:.2f}
 """)
 
 # ==================================================
-# RAW DATA
+# DATA PREVIEW
 # ==================================================
 
-with st.expander("View Dataset"):
+with st.expander("View Data"):
     st.dataframe(df.head(100), use_container_width=True)
