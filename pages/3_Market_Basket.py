@@ -1,104 +1,110 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
+from mlxtend.frequent_patterns import apriori, association_rules
 
-from mlxtend.frequent_patterns import (
-    apriori,
-    association_rules
-)
-
-# =====================================================
+# ==================================================
 # PAGE CONFIG
-# =====================================================
+# ==================================================
 
 st.set_page_config(
     page_title="Market Basket Analysis",
-    page_icon="🔗",
+    page_icon="🛒",
     layout="wide"
 )
 
-st.title("🔗 Market Basket Analysis")
+st.title("🛒 Market Basket Analysis")
 
-# =====================================================
+# ==================================================
 # LOAD DATA
-# =====================================================
+# ==================================================
 
 @st.cache_data
 def load_data():
 
-    df = pd.read_csv(
-        'data/Assignment-1_Data.csv'
-     
-    )
+    try:
+
+        df = pd.read_csv(
+            "data/Assignment-1_Data.csv.csv",
+            sep=None,
+            engine="python",
+            on_bad_lines="skip"
+        )
+
+    except Exception as e:
+
+        st.error(f"Dataset Error: {e}")
+        return pd.DataFrame()
 
     return df
 
 
 df = load_data()
 
-# =====================================================
-# COLUMN CHECK
-# =====================================================
+if df.empty:
+    st.stop()
 
-required_columns = [
-    "BillNo",
-    "Itemname"
-]
+# ==================================================
+# CLEAN COLUMN NAMES
+# ==================================================
 
-missing = [
-    col for col in required_columns
-    if col not in df.columns
-]
+df.columns = df.columns.str.strip()
 
-if missing:
+# ==================================================
+# AUTO DETECT COLUMNS
+# ==================================================
+
+invoice_col = None
+product_col = None
+
+for col in df.columns:
+
+    c = col.lower()
+
+    if c in [
+        "billno",
+        "invoice",
+        "invoiceno",
+        "invoice_no"
+    ]:
+        invoice_col = col
+
+    if c in [
+        "itemname",
+        "description",
+        "product",
+        "productname"
+    ]:
+        product_col = col
+
+if invoice_col is None or product_col is None:
 
     st.error(
-        f"Missing columns: {missing}"
+        f"""
+        Required columns not found.
+
+        Invoice Column: {invoice_col}
+        Product Column: {product_col}
+
+        Available Columns:
+        {list(df.columns)}
+        """
     )
 
     st.stop()
 
-# =====================================================
-# SIDEBAR FILTERS
-# =====================================================
-
-st.sidebar.header("MBA Parameters")
-
-min_support = st.sidebar.slider(
-    "Minimum Support",
-    0.001,
-    0.10,
-    0.01,
-    0.001
-)
-
-min_confidence = st.sidebar.slider(
-    "Minimum Confidence",
-    0.1,
-    1.0,
-    0.30,
-    0.05
-)
-
-min_lift = st.sidebar.slider(
-    "Minimum Lift",
-    1.0,
-    10.0,
-    1.0,
-    0.1
-)
-
-# =====================================================
+# ==================================================
 # CREATE BASKET
-# =====================================================
+# ==================================================
 
 basket = (
 
     df.groupby(
-        ["BillNo", "Itemname"]
-    )["Itemname"]
+        [invoice_col, product_col]
+    )
 
-    .count()
+    .size()
 
     .unstack()
 
@@ -110,356 +116,240 @@ basket = basket.applymap(
     lambda x: 1 if x > 0 else 0
 )
 
-# =====================================================
-# APRIORI
-# =====================================================
+# ==================================================
+# SETTINGS
+# ==================================================
 
-with st.spinner(
-    "Running Apriori..."
-):
+st.sidebar.header("Analysis Settings")
 
-    frequent_itemsets = apriori(
-
-        basket,
-
-        min_support=min_support,
-
-        use_colnames=True
-
-    )
-
-# =====================================================
-# ASSOCIATION RULES
-# =====================================================
-
-rules = association_rules(
-
-    frequent_itemsets,
-
-    metric="confidence",
-
-    min_threshold=min_confidence
-
+min_support = st.sidebar.slider(
+    "Minimum Support",
+    0.01,
+    0.20,
+    0.02,
+    0.01
 )
 
-rules = rules[
-    rules["lift"] >= min_lift
-]
-
-# =====================================================
-# SUMMARY KPIs
-# =====================================================
-
-st.subheader("📊 Market Basket Summary")
-
-col1, col2, col3 = st.columns(3)
-
-col1.metric(
-    "Transactions",
-    f"{basket.shape[0]:,}"
+min_confidence = st.sidebar.slider(
+    "Minimum Confidence",
+    0.10,
+    1.00,
+    0.30,
+    0.05
 )
 
-col2.metric(
-    "Frequent Itemsets",
-    f"{len(frequent_itemsets):,}"
-)
-
-col3.metric(
-    "Association Rules",
-    f"{len(rules):,}"
-)
-
-# =====================================================
+# ==================================================
 # FREQUENT ITEMSETS
-# =====================================================
+# ==================================================
 
-st.subheader("🛒 Frequent Itemsets")
+st.subheader("📦 Frequent Itemsets")
 
-itemsets_display = frequent_itemsets.copy()
+frequent_items = apriori(
+    basket,
+    min_support=min_support,
+    use_colnames=True
+)
 
-itemsets_display["itemsets"] = (
+if frequent_items.empty:
 
-    itemsets_display["itemsets"]
-
-    .apply(
-        lambda x: ", ".join(list(x))
+    st.warning(
+        "No frequent itemsets found."
     )
 
+    st.stop()
+
+frequent_items["Itemsets"] = (
+    frequent_items["itemsets"]
+    .astype(str)
 )
 
 st.dataframe(
-    itemsets_display,
+    frequent_items.sort_values(
+        "support",
+        ascending=False
+    ).head(20),
     use_container_width=True
 )
 
-# =====================================================
-# ASSOCIATION RULES TABLE
-# =====================================================
+# ==================================================
+# TOP ITEMSETS CHART
+# ==================================================
+
+top_itemsets = (
+
+    frequent_items
+
+    .sort_values(
+        "support",
+        ascending=False
+    )
+
+    .head(10)
+
+)
+
+fig = px.bar(
+
+    top_itemsets,
+
+    x="support",
+
+    y="Itemsets",
+
+    orientation="h",
+
+    title="Top Frequent Itemsets"
+
+)
+
+st.plotly_chart(
+    fig,
+    use_container_width=True
+)
+
+# ==================================================
+# ASSOCIATION RULES
+# ==================================================
 
 st.subheader("🔗 Association Rules")
 
-if not rules.empty:
+rules = association_rules(
+    frequent_items,
+    metric="confidence",
+    min_threshold=min_confidence
+)
 
-    rules_display = rules.copy()
+if rules.empty:
 
-    rules_display["antecedents"] = (
-
-        rules_display["antecedents"]
-
-        .apply(
-            lambda x: ", ".join(list(x))
-        )
-
-    )
-
-    rules_display["consequents"] = (
-
-        rules_display["consequents"]
-
-        .apply(
-            lambda x: ", ".join(list(x))
-        )
-
-    )
-
-    display_columns = [
-
-        "antecedents",
-
-        "consequents",
-
-        "support",
-
-        "confidence",
-
-        "lift"
-
-    ]
-
-    st.dataframe(
-
-        rules_display[
-            display_columns
-        ],
-
-        use_container_width=True
-
+    st.warning(
+        "No association rules found."
     )
 
 else:
 
-    st.warning(
-        "No rules found."
+    rules["Antecedents"] = (
+        rules["antecedents"]
+        .astype(str)
     )
 
-# =====================================================
-# PRODUCT SEARCH
-# =====================================================
-
-st.subheader("🔍 Product Recommendation Search")
-
-products = sorted(
-    df["Itemname"].unique()
-)
-
-selected_product = st.selectbox(
-
-    "Select Product",
-
-    products
-
-)
-
-if selected_product:
-
-    recommendations = rules_display[
-
-        rules_display[
-            "antecedents"
-        ].str.contains(
-            selected_product,
-            case=False,
-            na=False
-        )
-
-    ]
-
-    st.markdown(
-        f"### Products Bought With: {selected_product}"
+    rules["Consequents"] = (
+        rules["consequents"]
+        .astype(str)
     )
 
-    if not recommendations.empty:
-
-        st.dataframe(
-
-            recommendations[
-
-                [
-                    "antecedents",
-                    "consequents",
-                    "confidence",
-                    "lift"
-                ]
-
-            ],
-
-            use_container_width=True
-
-        )
-
-    else:
-
-        st.info(
-            "No recommendations found."
-        )
-
-# =====================================================
-# ASSOCIATION MATRIX
-# =====================================================
-
-st.subheader(
-    "📋 Product Association Matrix"
-)
-
-if not rules.empty:
-
-    matrix_df = rules_display[
-
-        [
-            "antecedents",
-            "consequents",
-            "lift"
-        ]
-
-    ]
-
-    matrix = matrix_df.pivot_table(
-
-        index="antecedents",
-
-        columns="consequents",
-
-        values="lift",
-
-        fill_value=0
-
-    )
+    display_rules = rules[[
+        "Antecedents",
+        "Consequents",
+        "support",
+        "confidence",
+        "lift"
+    ]]
 
     st.dataframe(
-        matrix,
+        display_rules.sort_values(
+            "lift",
+            ascending=False
+        ),
         use_container_width=True
     )
 
-# =====================================================
-# HEATMAP
-# =====================================================
-
-st.subheader("🔥 Association Heatmap")
+# ==================================================
+# LIFT VS CONFIDENCE
+# ==================================================
 
 if not rules.empty:
 
-    fig = px.imshow(
+    st.subheader("📊 Lift vs Confidence")
 
-        matrix,
+    fig = px.scatter(
 
-        aspect="auto",
+        rules,
 
-        labels=dict(
-            color="Lift"
-        )
+        x="confidence",
+
+        y="lift",
+
+        size="support",
+
+        hover_data=[
+            "Antecedents",
+            "Consequents"
+        ]
 
     )
 
     st.plotly_chart(
-
         fig,
-
         use_container_width=True
-
     )
 
-# =====================================================
-# TOP RULES
-# =====================================================
-
-st.subheader(
-    "🏆 Strongest Product Associations"
-)
+# ==================================================
+# PRODUCT RECOMMENDATIONS
+# ==================================================
 
 if not rules.empty:
 
+    st.subheader("🎯 Product Recommendations")
+
     top_rules = (
 
-        rules_display
+        rules
 
         .sort_values(
             "lift",
             ascending=False
         )
 
-        .head(20)
+        .head(10)
 
     )
 
-    fig = px.bar(
+    for _, row in top_rules.iterrows():
 
-        top_rules,
+        st.success(
 
-        x="lift",
+            f"""
+            Customers buying
+            {row['Antecedents']}
+            also buy
+            {row['Consequents']}
 
-        y="antecedents",
+            Confidence:
+            {row['confidence']:.2f}
 
-        color="confidence",
+            Lift:
+            {row['lift']:.2f}
+            """
 
-        orientation="h",
+        )
 
-        title="Top Product Associations"
+# ==================================================
+# BUSINESS INSIGHTS
+# ==================================================
 
-    )
+st.subheader("💡 Market Basket Insights")
 
-    st.plotly_chart(
-        fig,
+st.info(
+    f"""
+    Total Transactions: {basket.shape[0]}
+
+    Total Products: {basket.shape[1]}
+
+    Frequent Itemsets Found:
+    {len(frequent_items)}
+
+    Association Rules Found:
+    {len(rules)}
+    """
+)
+
+# ==================================================
+# DATA PREVIEW
+# ==================================================
+
+with st.expander("View Source Data"):
+
+    st.dataframe(
+        df.head(100),
         use_container_width=True
     )
-
-# =====================================================
-# DOWNLOAD RULES
-# =====================================================
-
-st.subheader("📥 Download Results")
-
-csv = rules_display.to_csv(
-    index=False
-).encode("utf-8")
-
-st.download_button(
-
-    label="Download Association Rules",
-
-    data=csv,
-
-    file_name="association_rules.csv",
-
-    mime="text/csv"
-
-)
-
-# =====================================================
-# BUSINESS INSIGHTS
-# =====================================================
-
-st.subheader("💡 Business Insights")
-
-st.success(
-    """
-    • Bundle products with high lift values.
-
-    • Cross-sell products frequently purchased together.
-
-    • Place associated products nearby in stores.
-
-    • Use recommendations in e-commerce checkout.
-
-    • Create combo offers using high-confidence rules.
-    """
-)
