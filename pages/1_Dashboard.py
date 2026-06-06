@@ -1,11 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-try:
-    import plotly.express as px
-except Exception as e:
-    st.error(f"Plotly Error: {e}")
-import plotly.graph_objects as go
+import plotly.express as px
 from sklearn.ensemble import RandomForestRegressor
 
 # ==================================================
@@ -26,34 +22,109 @@ st.title("📊 Retail Analytics Dashboard")
 
 @st.cache_data
 def load_data():
-
-    df = pd.read_csv(
-        'data/Assignment-1_Data.csv.csv',sep=";"
-        
-    )
+    try:
+        df = pd.read_csv(
+            "data/Assignment-1_Data.csv.csv",
+            sep=";"
+        )
+    except:
+        df = pd.read_csv(
+            "data/Assignment-1_Data.csv.csv"
+        )
 
     return df
 
 df = load_data()
 
 # ==================================================
-# DATA PREPARATION
+# CLEAN COLUMN NAMES
 # ==================================================
 
-if "Date" in df.columns:
-    df["Date"] = pd.to_datetime(
-        df["Date"],
+df.columns = df.columns.str.strip()
+
+# ==================================================
+# AUTO DETECT COLUMNS
+# ==================================================
+
+qty_col = None
+price_col = None
+date_col = None
+customer_col = None
+product_col = None
+bill_col = None
+country_col = None
+
+for col in df.columns:
+
+    c = col.lower()
+
+    if c in ["qty", "quantity"]:
+        qty_col = col
+
+    elif c in ["price", "unitprice", "sellingprice"]:
+        price_col = col
+
+    elif c == "date":
+        date_col = col
+
+    elif c in ["customerid", "customer_id"]:
+        customer_col = col
+
+    elif c in ["itemname", "item_name", "product", "description"]:
+        product_col = col
+
+    elif c in ["billno", "invoice", "invoiceno"]:
+        bill_col = col
+
+    elif c == "country":
+        country_col = col
+
+# ==================================================
+# DATE
+# ==================================================
+
+if date_col:
+    df[date_col] = pd.to_datetime(
+        df[date_col],
         errors="coerce"
     )
 
-if (
-    "Qty" in df.columns and
-    "Price" in df.columns
-):
+# ==================================================
+# REVENUE
+# ==================================================
+
+if qty_col and price_col:
+
+    df[qty_col] = pd.to_numeric(
+        df[qty_col],
+        errors="coerce"
+    )
+
+    df[price_col] = pd.to_numeric(
+        df[price_col],
+        errors="coerce"
+    )
 
     df["Revenue"] = (
-        df["Qty"] * df["Price"]
+        df[qty_col].fillna(0)
+        *
+        df[price_col].fillna(0)
     )
+
+else:
+
+    st.error(
+        f"""
+        Revenue cannot be created.
+
+        Quantity Column Found: {qty_col}
+        Price Column Found: {price_col}
+
+        Dataset Columns:
+        {list(df.columns)}
+        """
+    )
+    st.stop()
 
 # ==================================================
 # KPI SECTION
@@ -63,28 +134,21 @@ st.subheader("Business Overview")
 
 col1, col2, col3, col4 = st.columns(4)
 
-total_revenue = (
-    df["Revenue"].sum()
-    if "Revenue" in df.columns
-    else 0
-)
+total_revenue = df["Revenue"].sum()
 
 total_customers = (
-    df["CustomerID"].nunique()
-    if "CustomerID" in df.columns
-    else 0
+    df[customer_col].nunique()
+    if customer_col else 0
 )
 
 total_products = (
-    df["Itemname"].nunique()
-    if "Itemname" in df.columns
-    else 0
+    df[product_col].nunique()
+    if product_col else 0
 )
 
 total_transactions = (
-    df["BillNo"].nunique()
-    if "BillNo" in df.columns
-    else 0
+    df[bill_col].nunique()
+    if bill_col else 0
 )
 
 col1.metric(
@@ -110,30 +174,31 @@ col4.metric(
 st.divider()
 
 # ==================================================
-# MONTHLY SALES TREND
+# MONTHLY TREND
 # ==================================================
 
-st.subheader("📈 Revenue Trend")
+if date_col:
 
-if "Date" in df.columns:
+    st.subheader("📈 Revenue Trend")
 
     monthly = (
-        df
-        .groupby(
-            df["Date"].dt.to_period("M")
+        df.groupby(
+            df[date_col].dt.to_period("M")
         )["Revenue"]
         .sum()
         .reset_index()
     )
 
-    monthly["Date"] = monthly["Date"].astype(str)
+    monthly[date_col] = (
+        monthly[date_col]
+        .astype(str)
+    )
 
     fig = px.line(
         monthly,
-        x="Date",
+        x=date_col,
         y="Revenue",
-        markers=True,
-        title="Monthly Revenue Trend"
+        markers=True
     )
 
     st.plotly_chart(
@@ -147,37 +212,24 @@ if "Date" in df.columns:
 
 col1, col2 = st.columns(2)
 
-with col1:
+if product_col:
 
-    st.subheader("🏆 Top Products")
+    with col1:
 
-    if (
-        "Itemname" in df.columns and
-        "Revenue" in df.columns
-    ):
+        st.subheader("🏆 Top Products")
 
         top_products = (
-
-            df.groupby(
-                "Itemname"
-            )["Revenue"]
-
+            df.groupby(product_col)["Revenue"]
             .sum()
-
-            .sort_values(
-                ascending=False
-            )
-
+            .sort_values(ascending=False)
             .head(10)
-
             .reset_index()
-
         )
 
         fig = px.bar(
             top_products,
             x="Revenue",
-            y="Itemname",
+            y=product_col,
             orientation="h"
         )
 
@@ -190,36 +242,23 @@ with col1:
 # TOP CUSTOMERS
 # ==================================================
 
-with col2:
+if customer_col:
 
-    st.subheader("👑 Top Customers")
+    with col2:
 
-    if (
-        "CustomerID" in df.columns and
-        "Revenue" in df.columns
-    ):
+        st.subheader("👑 Top Customers")
 
         top_customers = (
-
-            df.groupby(
-                "CustomerID"
-            )["Revenue"]
-
+            df.groupby(customer_col)["Revenue"]
             .sum()
-
-            .sort_values(
-                ascending=False
-            )
-
+            .sort_values(ascending=False)
             .head(10)
-
             .reset_index()
-
         )
 
         fig = px.bar(
             top_customers,
-            x="CustomerID",
+            x=customer_col,
             y="Revenue"
         )
 
@@ -232,31 +271,21 @@ with col2:
 # COUNTRY ANALYSIS
 # ==================================================
 
-if "Country" in df.columns:
+if country_col:
 
     st.subheader("🌍 Revenue by Country")
 
     country_sales = (
-
-        df.groupby(
-            "Country"
-        )["Revenue"]
-
+        df.groupby(country_col)["Revenue"]
         .sum()
-
-        .sort_values(
-            ascending=False
-        )
-
+        .sort_values(ascending=False)
         .head(15)
-
         .reset_index()
-
     )
 
     fig = px.bar(
         country_sales,
-        x="Country",
+        x=country_col,
         y="Revenue"
     )
 
@@ -269,35 +298,22 @@ if "Country" in df.columns:
 # PRODUCT PERFORMANCE
 # ==================================================
 
-st.subheader("📦 Product Performance")
+if product_col:
 
-if (
-    "Itemname" in df.columns and
-    "Qty" in df.columns
-):
+    st.subheader("📦 Product Performance")
 
     product_perf = (
-
-        df.groupby(
-            "Itemname"
-        )
-
+        df.groupby(product_col)
         .agg({
-
-            "Qty":"sum",
-            "Revenue":"sum"
-
+            qty_col: "sum",
+            "Revenue": "sum"
         })
-
         .reset_index()
-
         .sort_values(
             "Revenue",
             ascending=False
         )
-
         .head(20)
-
     )
 
     st.dataframe(
@@ -309,51 +325,30 @@ if (
 # CUSTOMER ANALYSIS
 # ==================================================
 
-st.subheader("👥 Customer Analysis")
+if customer_col and bill_col:
 
-if (
-    "CustomerID" in df.columns and
-    "Revenue" in df.columns
-):
+    st.subheader("👥 Customer Analysis")
 
     customer_df = (
-
-        df.groupby(
-            "CustomerID"
-        )
-
+        df.groupby(customer_col)
         .agg({
-
-            "Revenue":"sum",
-
-            "BillNo":"nunique"
-
+            "Revenue": "sum",
+            bill_col: "nunique"
         })
-
         .reset_index()
-
     )
 
     customer_df.columns = [
-
         "CustomerID",
         "TotalSpend",
         "Orders"
-
     ]
 
     fig = px.scatter(
-
         customer_df,
-
         x="Orders",
-
         y="TotalSpend",
-
-        size="TotalSpend",
-
-        title="Orders vs Spend"
-
+        size="TotalSpend"
     )
 
     st.plotly_chart(
@@ -362,14 +357,12 @@ if (
     )
 
 # ==================================================
-# CORRELATION ANALYSIS
+# CORRELATION
 # ==================================================
 
 st.subheader("🔥 Correlation Analysis")
 
-numeric_df = df.select_dtypes(
-    include=np.number
-)
+numeric_df = df.select_dtypes(include=np.number)
 
 if len(numeric_df.columns) > 1:
 
@@ -377,8 +370,7 @@ if len(numeric_df.columns) > 1:
 
     fig = px.imshow(
         corr,
-        text_auto=True,
-        aspect="auto"
+        text_auto=True
     )
 
     st.plotly_chart(
@@ -390,74 +382,34 @@ if len(numeric_df.columns) > 1:
 # ROOT CAUSE ANALYSIS
 # ==================================================
 
-st.subheader("🎯 Key Driver Analysis")
+if qty_col and price_col:
 
-required_cols = [
-    "Qty",
-    "Price",
-    "Revenue"
-]
+    st.subheader("🎯 Revenue Driver Analysis")
 
-if all(
-    col in df.columns
-    for col in required_cols
-):
-
-    X = df[[
-        "Qty",
-        "Price"
-    ]]
-
+    X = df[[qty_col, price_col]].fillna(0)
     y = df["Revenue"]
 
     model = RandomForestRegressor(
+        n_estimators=100,
         random_state=42
     )
 
     model.fit(X, y)
 
     importance = pd.DataFrame({
-
-        "Feature":
-        X.columns,
-
-        "Importance":
-        model.feature_importances_
-
+        "Feature": X.columns,
+        "Importance": model.feature_importances_
     })
 
-    importance = (
-
-        importance
-
-        .sort_values(
-            "Importance",
-            ascending=False
-        )
-
-    )
-
     fig = px.bar(
-
         importance,
-
         x="Importance",
-
         y="Feature",
-
-        orientation="h",
-
-        title="Revenue Drivers"
-
+        orientation="h"
     )
 
     st.plotly_chart(
         fig,
-        use_container_width=True
-    )
-
-    st.dataframe(
-        importance,
         use_container_width=True
     )
 
@@ -466,7 +418,6 @@ if all(
 # ==================================================
 
 with st.expander("View Dataset"):
-
     st.dataframe(
         df.head(100),
         use_container_width=True
@@ -476,18 +427,11 @@ with st.expander("View Dataset"):
 # DOWNLOAD
 # ==================================================
 
-csv = df.to_csv(
-    index=False
-).encode("utf-8")
+csv = df.to_csv(index=False).encode("utf-8")
 
 st.download_button(
-
-    label="⬇ Download Dataset",
-
-    data=csv,
-
-    file_name="retail_data.csv",
-
-    mime="text/csv"
-
+    "⬇ Download Dataset",
+    csv,
+    "retail_data.csv",
+    "text/csv"
 )
